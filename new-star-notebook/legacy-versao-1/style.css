@@ -1,0 +1,334 @@
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f1f5f9;
+    margin: 0;
+    padding: 20px;
+    color: #334155;
+}
+
+.container {
+    max-width: 1100px;
+    margin: 0 auto;
+    background: #ffffff;
+    padding: 25px;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+header h1 {
+    text-align: center;
+    color: #1e3a8a;
+    margin-bottom: 20px;
+}
+
+.tabs {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+.tab-btn {
+    padding: 10px 16px;
+    border: none;
+    background-color: #e2e8f0;
+    cursor: pointer;
+    font-weight: bold;
+    border-radius: 4px;
+    color: #475569;
+}
+
+.tab-btn.active {
+    background-color: #2563eb;
+    color: white;
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+.grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+}
+
+.grid-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 15px;
+}
+
+.form-group {
+    margin-bottom: 12px;
+}
+
+.form-group label {
+    display: block;
+    font-size: 11px;
+    font-weight: bold;
+    color: #2563eb;
+    margin-bottom: 4px;
+}
+
+.form-group input, .form-group select, .form-group textarea {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+.os-section-title {
+    background-color: #f8fafc;
+    border-left: 4px solid #f59e0b;
+    padding: 6px 10px;
+    font-weight: bold;
+    font-size: 12px;
+    margin: 20px 0 10px 0;
+    color: #1e293b;
+}
+
+.search-box {
+    margin-bottom: 15px;
+}
+
+.search-box input {
+    width: 100%;
+    padding: 10px;
+    border: 2px solid #2563eb;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.dashboard-financeiro {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.card-fin {
+    flex: 1;
+    padding: 15px;
+    border-radius: 6px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+}
+
+.card-fin.devendo { background-color: #fee2e2; color: #991b1b; }
+.card-fin.pago { background-color: #d1fae5; color: #065f46; }
+.card-fin strong { font-size: 20px; margin-top: 5px; }
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+th, td {
+    border: 1px solid #e2e8f0;
+    padding: 10px;
+    text-align: left;
+    font-size: 14px;
+}
+
+th {
+    background-color: #f8fafc;
+    color: #1e293b;
+}
+
+.badge {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.badge-em-andamento { background-color: #fef3c7; color: #92400e; }
+.badge-alerta { background-color: #ef4444 !important; color: #ffffff !important; animation: piscar 1.5s infinite; }
+.badge-pronto { background-color: #d1fae5; color: #065f46; }
+.badge-entregue { background-color: #e0f2fe; color: #0369a1; }
+.badge-devendo { background-color: #fee2e2; color: #991b1b; }
+.badge-pago { background-color: #d1fae5; color: #065f46; }
+
+@keyframes piscar {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+.btn-primary {
+    background-color: #2563eb;
+    color: white;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.btn-success {
+    background-color: #10b981;
+    color: white;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.btn-danger {
+    background-color: #ef4444;
+    color: white;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.status-select {
+    padding: 4px;
+    border-radius: 4px;
+    border: 1px solid #cbd5e1;
+}
+
+/* ================= STYLES DO CARTÃO DE NOTEBOOK PARA IMPRESSÃO ================= */
+.etiqueta-print-only, .print-relatorio-only {
+    display: none;
+}
+
+.etiqueta-card {
+    width: 320px;
+    padding: 15px;
+    background: #ffffff;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #000000;
+    box-sizing: border-box;
+}
+
+.etiqueta-card .icon-laptop {
+    width: 140px;
+    height: auto;
+    margin-bottom: 5px;
+    display: block;
+}
+
+.etiqueta-card .titulo-config {
+    font-size: 22px;
+    font-weight: 900;
+    text-transform: lowercase;
+    letter-spacing: -0.5px;
+    margin-bottom: 6px;
+    line-height: 1;
+}
+
+.etiqueta-card .linha-item {
+    font-size: 15px;
+    font-weight: 800;
+    text-transform: uppercase;
+    line-height: 1.25;
+}
+
+.etiqueta-card .linha-preco {
+    font-size: 16px;
+    font-weight: 900;
+    text-transform: uppercase;
+    margin-top: 10px;
+}
+
+/* Regras exclusivas para impressão */
+@media print {
+    body * {
+        visibility: hidden !important;
+    }
+
+    body {
+        background-color: #fff !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+
+    /* Impressão normal do Gerador de OS */
+    body.imprimindo-os #gerador-os, body.imprimindo-os #gerador-os * {
+        visibility: visible !important;
+    }
+
+    body.imprimindo-os #gerador-os {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    /* Impressão de OS Clientes Loja */
+    body.imprimindo-os-cliente #area-impressao-os-cliente, 
+    body.imprimindo-os-cliente #area-impressao-os-cliente * {
+        visibility: visible !important;
+    }
+
+    body.imprimindo-os-cliente #area-impressao-os-cliente {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100% !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+
+    /* Impressão do Cartão de Notebook da Loja */
+    body.imprimindo-etiqueta #area-impressao-etiqueta, 
+    body.imprimindo-etiqueta #area-impressao-etiqueta * {
+        visibility: visible !important;
+        display: block !important;
+    }
+
+    body.imprimindo-etiqueta #area-impressao-etiqueta {
+        position: absolute !important;
+        left: 20px !important;
+        top: 20px !important;
+    }
+
+    /* Impressão do Relatório do Estoque */
+    body.imprimindo-relatorio-estoque #area-relatorio-estoque, 
+    body.imprimindo-relatorio-estoque #area-relatorio-estoque * {
+        visibility: visible !important;
+        display: block !important;
+    }
+
+    body.imprimindo-relatorio-estoque #area-relatorio-estoque {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100% !important;
+    }
+
+    .no-print, header, .tabs {
+        display: none !important;
+    }
+
+    .form-group {
+        margin-bottom: 6px !important;
+    }
+
+    .os-section-title {
+        margin: 10px 0 5px 0 !important;
+        padding: 4px 8px !important;
+    }
+
+    .container {
+        box-shadow: none !important;
+        padding: 0 !important;
+        max-width: 100% !important;
+    }
+}

@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Star Notebook</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Biblioteca para Gerar PDF Real -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+</head>
+<body>
+
+    <div class="container">
+        <!-- CABEÇALHO DO SISTEMA -->
+        <header class="no-print">
+            <h1>NEW STAR NOTEBOOK</h1>
+        </header>
+
+        <!-- MENU DE NAVEGAÇÃO POR ABAS -->
+        <div class="tabs no-print">
+            <button class="tab-btn active" onclick="switchTab(event, 'servicos')">Ordens de Serviço</button>
+            <button class="tab-btn" onclick="switchTab(event, 'telefones')">Telefones</button>
+            <button class="tab-btn" onclick="switchTab(event, 'financeiro')">Financeiro</button>
+            <button class="tab-btn" onclick="switchTab(event, 'pecas')">Peças e Fontes</button>
+            <button class="tab-btn" onclick="switchTab(event, 'gerador-os')">+ Gerar OS</button>
+            <button class="tab-btn" onclick="switchTab(event, 'os-prontas')">OS Prontas</button>
+            <button class="tab-btn" onclick="switchTab(event, 'notebooks-loja')">Notebooks Loja</button>
+            <button class="tab-btn" onclick="switchTab(event, 'os-clientes-loja')">OS clientes loja</button>
+        </div>
+
+        <!-- ================= ABAS DO SISTEMA ================= -->
+
+        <!-- ABA 1: ORDENS DE SERVIÇO -->
+        <div id="servicos" class="tab-content active no-print">
+            <h2>Ordens de Serviço</h2>
+            <div class="search-box">
+                <input type="text" id="busca-servicos" placeholder="🔍 Buscar por Cliente ou Nº da OS..." onkeyup="filtrarServicos()">
+            </div>
+            <div class="grid-2">
+                <div>
+                    <h3>Cadastrar Novo Serviço</h3>
+                    <form id="form-servico" onsubmit="adicionarItem(event, 'servicos')">
+                        <div class="form-group"><label>Nome:</label><input type="text" id="srv-nome" required></div>
+                        <div class="form-group"><label>Nº OS:</label><input type="number" id="srv-num" required></div>
+                        <div class="form-group">
+                            <label>Status:</label>
+                            <select id="srv-status">
+                                <option value="Em andamento">Em andamento</option>
+                                <option value="Pronto">Pronto</option>
+                                <option value="Entregue">Entregue</option>
+                            </select>
+                        </div>
+                        <div class="form-group"><label>Notebook:</label><input type="text" id="srv-notebook" required></div>
+                        <div class="form-group">
+                            <label>C/ Fonte:</label>
+                            <select id="srv-cfont"><option value="Sim">Sim</option><option value="Não">Não</option></select>
+                        </div>
+                        <div class="form-group">
+                            <label>C/ Maleta:</label>
+                            <select id="srv-cmaleta"><option value="Sim">Sim</option><option value="Não">Não</option></select>
+                        </div>
+                        <div class="form-group"><label>Descrição:</label><input type="text" id="srv-desc"></div>
+                        <div class="form-group"><label>Data Inicial:</label><input type="date" id="srv-data" required></div>
+                        <div class="form-group"><label>Local / Com quem:</label><input type="text" id="srv-local"></div>
+                        <button type="submit" class="btn-primary">Salvar Serviço</button>
+                    </form>
+                </div>
+                <div>
+                    <h3>Lista de Serviços</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>Nº</th>
+                                <th>Status</th>
+                                <th>Notebook</th>
+                                <th>Fonte</th>
+                                <th>Maleta</th>
+                                <th>Data Inicial</th>
+                                <th>Descrição</th>
+                                <th>Local</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabela-servicos-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ABA 2: TELEFONES -->
+        <div id="telefones" class="tab-content no-print">
+            <h2>Contatos</h2>
+            <div class="grid-2">
+                <div>
+                    <h3>Adicionar Contato</h3>
+                    <form id="form-telefone" onsubmit="adicionarItem(event, 'telefones')">
+                        <div class="form-group"><label>Nome:</label><input type="text" id="tel-nome" required></div>
+                        <div class="form-group"><label>Telefone 1:</label><input type="text" id="tel-1" required></div>
+                        <div class="form-group"><label>Telefone 2:</label><input type="text" id="tel-2"></div>
+                        <button type="submit" class="btn-primary">Salvar Contato</button>
+                    </form>
+                </div>
+                <div>
+                    <h3>Lista de Contatos</h3>
+                    <table>
+                        <thead>
+                            <tr><th>Nome</th><th>Telefone 1</th><th>Telefone 2</th><th>Ações</th></tr>
+                        </thead>
+                        <tbody id="tabela-telefones-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ABA 3: FINANCEIRO -->
+        <div id="financeiro" class="tab-content no-print">
+            <h2>Financeiro</h2>
+            <div class="dashboard-financeiro">
+                <div class="card-fin devendo">
+                    <span>A Receber (Devendo)</span>
+                    <strong id="total-devendo">R$ 0,00</strong>
+                </div>
+                <div class="card-fin pago">
+                    <span>Recebido (Pago)</span>
+                    <strong id="total-pago">R$ 0,00</strong>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div>
+                    <h3>Adicionar Lançamento</h3>
+                    <form id="form-financeiro" onsubmit="adicionarItem(event, 'financeiro')">
+                        <div class="form-group"><label>Nome:</label><input type="text" id="fin-nome" required></div>
+                        <div class="form-group">
+                            <label>Status:</label>
+                            <select id="fin-status">
+                                <option value="DEVENDO">DEVENDO</option>
+                                <option value="PAGO">PAGO</option>
+                            </select>
+                        </div>
+                        <div class="form-group"><label>Valor (R$):</label><input type="number" step="0.01" id="fin-valor" required></div>
+                        <div class="form-group"><label>Notebook:</label><input type="text" id="fin-notebook" required></div>
+                        <div class="form-group"><label>Referente:</label><input type="text" id="fin-referente"></div>
+                        <button type="submit" class="btn-primary">Salvar Financeiro</button>
+                    </form>
+                </div>
+                <div>
+                    <h3>Lista Financeira</h3>
+                    <table>
+                        <thead>
+                            <tr><th>Nome</th><th>Status</th><th>Valor</th><th>Notebook</th><th>Ref.</th><th>Ações</th></tr>
+                        </thead>
+                        <tbody id="tabela-financeiro-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ABA 4: PEÇAS -->
+        <div id="pecas" class="tab-content no-print">
+            <h2>Peças e Fontes na Loja</h2>
+            <div class="grid-2">
+                <div>
+                    <h3>Adicionar Peça/Fonte</h3>
+                    <form id="form-pecas" onsubmit="adicionarItem(event, 'pecas')">
+                        <div class="form-group"><label>Cliente:</label><input type="text" id="pec-cliente" required></div>
+                        <div class="form-group"><label>Item / Peça:</label><input type="text" id="pec-item" required></div>
+                        <div class="form-group"><label>Data:</label><input type="date" id="pec-data" required></div>
+                        <div class="form-group">
+                            <label>Status:</label>
+                            <select id="pec-status">
+                                <option value="Não devolvido">Não devolvido</option>
+                                <option value="Devolvido">Devolvido</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn-primary">Salvar Peça</button>
+                    </form>
+                </div>
+                <div>
+                    <h3>Lista de Peças</h3>
+                    <table>
+                        <thead>
+                            <tr><th>Cliente</th><th>Item</th><th>Data</th><th>Status</th><th>Ações</th></tr>
+                        </thead>
+                        <tbody id="tabela-pecas-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ABA 5: GERADOR DE OS -->
+        <div id="gerador-os" class="tab-content">
+            <h2 class="no-print">Gerador de Ordem de Serviço</h2>
+            <div id="area-impressao-os">
+                <form id="form-gerador-os">
+                    <div class="os-section-title">SEUS DADOS (PRESTADOR)</div>
+                    <div class="grid-2">
+                        <div class="form-group"><label>NOME / EMPRESA</label><input type="text" id="os-prestador-nome" value="New Star Notebook" required></div>
+                        <div class="form-group"><label>CPF / CNPJ</label><input type="text" id="os-prestador-doc"></div>
+                        <div class="form-group"><label>TELEFONE / WHATSAPP</label><input type="text" id="os-prestador-tel"></div>
+                        <div class="form-group"><label>E-MAIL</label><input type="email" id="os-prestador-email"></div>
+                    </div>
+
+                    <div class="os-section-title">DADOS DO CLIENTE</div>
+                    <div class="grid-2">
+                        <div class="form-group"><label>NOME DO CLIENTE</label><input type="text" id="os-cliente-nome" required></div>
+                        <div class="form-group"><label>TELEFONE DO CLIENTE</label><input type="text" id="os-cliente-tel"></div>
+                        <div class="form-group" style="grid-column: span 2;"><label>ENDEREÇO DO CLIENTE</label><input type="text" id="os-cliente-end"></div>
+                    </div>
+
+                    <div class="os-section-title">EQUIPAMENTO E SERVIÇO</div>
+                    <div class="grid-3">
+                        <div class="form-group"><label>NÚMERO DA OS</label><input type="text" id="os-numero" required></div>
+                        <div class="form-group"><label>DATA DE ENTRADA</label><input type="date" id="os-data-entrada" required></div>
+                        <div class="form-group"><label>PREVISÃO DE ENTREGA</label><input type="date" id="os-data-previsao"></div>
+                    </div>
+                    <div class="grid-2">
+                        <div class="form-group"><label>EQUIPAMENTO / OBJETO</label><input type="text" id="os-equipamento" required></div>
+                        <div class="form-group">
+                            <label>PRAZO DE GARANTIA</label>
+                            <select id="os-garantia">
+                                <option value="30 dias">30 dias</option>
+                                <option value="90 dias">90 dias</option>
+                                <option value="Sem garantia">Sem garantia</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>PROBLEMA RELATADO PELO CLIENTE</label>
+                        <textarea id="os-problema" rows="2"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>SERVIÇO EXECUTADO / DIAGNÓSTICO</label>
+                        <textarea id="os-servico-exec" rows="2"></textarea>
+                    </div>
+
+                    <div class="os-section-title">ITENS, PEÇAS E VALORES</div>
+                    <div class="form-group"><label>DESCRIÇÃO DO ITEM / SERVIÇO E VALOR TOTAL (R$)</label><input type="text" id="os-itens" placeholder="Ex: Troca de Tela - R$ 250,00" required></div>
+
+                    <div class="os-section-title">OBSERVAÇÕES / CONDIÇÕES DE PAGAMENTO</div>
+                    <div class="form-group"><textarea id="os-obs" rows="2" placeholder="Pagamento à vista..."></textarea></div>
+                </form>
+            </div>
+
+            <div class="no-print" style="display: flex; gap: 10px; margin-top: 20px;">
+                <button type="button" class="btn-primary" style="background-color: #f59e0b;" onclick="salvarEBaixarPDFOS()">Salvar e Baixar PDF</button>
+                <button type="button" class="btn-primary" onclick="window.print()">Imprimir Direto</button>
+                <button type="reset" form="form-gerador-os" class="btn-danger">Limpar</button>
+            </div>
+        </div>
+
+        <!-- ABA 6: OS PRONTAS -->
+        <div id="os-prontas" class="tab-content no-print">
+            <h2>Ordens de Serviço Salvas</h2>
+            <div class="search-box">
+                <input type="text" id="busca-os" placeholder="🔍 Buscar por Nome ou Nº da OS..." onkeyup="filtrarOSProntas()">
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Nº</th>
+                        <th>Equipamento</th>
+                        <th>Data Inicial</th>
+                        <th>Descrição / Serviço</th>
+                        <th>Valor / Itens</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody id="tabela-os-prontas-body"></tbody>
+            </table>
+        </div>
+
+        <!-- ABA 7: NOTEBOOKS LOJA -->
+        <div id="notebooks-loja" class="tab-content">
+            <h2 class="no-print">Notebooks em Estoque na Loja</h2>
+            <div class="search-box no-print">
+                <input type="text" id="busca-notebooks" placeholder="🔍 Buscar por Notebook, Modelo ou Processador..." onkeyup="filtrarNotebooksLoja()">
+            </div>
+            <div class="grid-2 no-print">
+                <div>
+                    <h3 id="titulo-form-notebook">Cadastrar Notebook para Loja</h3>
+                    <form id="form-notebooks-loja" onsubmit="salvarNotebookLoja(event)">
+                        <input type="hidden" id="nb-index" value="-1">
+                        <div class="form-group"><label>Notebook (Marca / Marca Principal):</label><input type="text" id="nb-notebook" placeholder="Ex: LENOVO, DELL" required></div>
+                        <div class="form-group"><label>Modelo:</label><input type="text" id="nb-modelo" placeholder="Ex: Ideapad 330, V14" required></div>
+                        <div class="form-group"><label>Processador:</label><input type="text" id="nb-processador" placeholder="Ex: AMD RYZEN 3 7320U, Intel i5 10ª Gen" required></div>
+                        <div class="form-group"><label>Memória:</label><input type="text" id="nb-memoria" placeholder="Ex: 8GB RAM, 16GB DDR4" required></div>
+                        <div class="form-group"><label>Tela:</label><input type="text" id="nb-tela" placeholder="Ex: 15.6'' Full HD, 14'' HD" required></div>
+                        <div class="form-group"><label>Bateria:</label><input type="text" id="nb-bateria" placeholder="Ex: Boa (2 horas), Nova" required></div>
+                        <div class="form-group"><label>NVME:</label><input type="text" id="nb-nvme" placeholder="Ex: NVME 256GB, Não possui"></div>
+                        <div class="form-group"><label>SSD:</label><input type="text" id="nb-ssd" placeholder="Ex: SSD 240GB, Não possui"></div>
+                        <div class="form-group"><label>Vídeo / Placa de Vídeo:</label><input type="text" id="nb-video" placeholder="Ex: C/VIDEO, Vega 6, GTX 1650"></div>
+                        <div class="form-group"><label>Preço / Condições:</label><input type="text" id="nb-preco" placeholder="Ex: R$ 1.600,00 (4X SEM JUROS)"></div>
+                        <div style="display: flex; gap: 10px;">
+                            <button type="submit" class="btn-primary" id="btn-salvar-nb">Salvar Notebook</button>
+                            <button type="button" class="btn-danger" id="btn-cancelar-nb" style="display:none;" onclick="cancelarEdicaoNotebook()">Cancelar Edit</button>
+                        </div>
+                    </form>
+                </div>
+                <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <h3 style="margin: 0;">Estoque de Notebooks</h3>
+                        <button type="button" class="btn-primary" style="background-color: #10b981;" onclick="imprimirListaEstoqueLoja()">🖨️ Imprimir Lista de Estoque</button>
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Notebook</th>
+                                <th>Modelo</th>
+                                <th>Processador</th>
+                                <th>RAM</th>
+                                <th>Armazenamento</th>
+                                <th>Preço</th>
+                                <th class="no-print">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabela-notebooks-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- RELATÓRIO IMPRESSO EXCLUSIVO DE ESTOQUE -->
+            <div id="area-relatorio-estoque" class="print-relatorio-only">
+                <div style="text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; margin-bottom: 15px;">
+                    <h1 style="margin: 0; color: #1e3a8a;">NEW STAR NOTEBOOK</h1>
+                    <h3 style="margin: 5px 0 0 0; color: #475569;">RELATÓRIO DE ESTOQUE DE NOTEBOOKS DA LOJA</h3>
+                </div>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr>
+                            <th style="border: 1px solid #000; padding: 6px;">Notebook</th>
+                            <th style="border: 1px solid #000; padding: 6px;">Modelo</th>
+                            <th style="border: 1px solid #000; padding: 6px;">Processador</th>
+                            <th style="border: 1px solid #000; padding: 6px;">RAM</th>
+                            <th style="border: 1px solid #000; padding: 6px;">Tela</th>
+                            <th style="border: 1px solid #000; padding: 6px;">Armazenamento</th>
+                            <th style="border: 1px solid #000; padding: 6px;">Preço</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-relatorio-estoque-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ABA 8: OS CLIENTES LOJA -->
+        <div id="os-clientes-loja" class="tab-content">
+            <h2 class="no-print">OS Clientes Loja</h2>
+            <div id="area-impressao-os-cliente" style="max-width: 650px; margin: 0 auto; background: #fff; padding: 15px; border: 1px solid #cbd5e1; border-radius: 6px;">
+                <form id="form-os-cliente-loja">
+                    <div style="text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 8px; margin-bottom: 15px;">
+                        <h2 style="margin: 0; color: #1e3a8a;">NEW STAR NOTEBOOK</h2>
+                        <span style="font-size: 13px; font-weight: bold; color: #475569;">ORDEM DE SERVIÇO DO CLIENTE</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Nome:</label>
+                        <input type="text" id="oscl-nome" required>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Nº OS:</label>
+                            <input type="number" id="oscl-num" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Telefone:</label>
+                            <input type="text" id="oscl-telefone" placeholder="Telefone do cliente">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Status:</label>
+                        <select id="oscl-status">
+                            <option value="Em andamento">Em andamento</option>
+                            <option value="Pronto">Pronto</option>
+                            <option value="Entregue">Entregue</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Notebook:</label>
+                        <input type="text" id="oscl-notebook" required>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>C/ Fonte:</label>
+                            <select id="oscl-cfont">
+                                <option value="Sim">Sim</option>
+                                <option value="Não">Não</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>C/ Maleta:</label>
+                            <select id="oscl-cmaleta">
+                                <option value="Sim">Sim</option>
+                                <option value="Não">Não</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Descrição:</label>
+                        <textarea id="oscl-desc" rows="3"></textarea>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Data Inicial:</label>
+                            <input type="date" id="oscl-data" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Local / Com quem:</label>
+                            <input type="text" id="oscl-local">
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+            <div class="no-print" style="display: flex; justify-content: center; gap: 10px; margin-top: 20px;">
+                <button type="button" class="btn-success" style="padding: 10px 20px; font-size: 15px;" onclick="imprimirOSClienteLoja()">🖨️ Imprimir OS</button>
+                <button type="reset" form="form-os-cliente-loja" class="btn-danger" style="padding: 10px 20px; font-size: 15px;">Limpar</button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ÁREA EXCLUSIVA DE IMPRESSÃO DE ETIQUETA / PLACA DE NOTEBOOK -->
+    <div id="area-impressao-etiqueta" class="etiqueta-print-only"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="description" content="New Star Notebook — ordens de serviço, estoque e financeiro da sua loja.">
+  <title>New Star Notebook</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232563eb'/%3E%3Ctext x='32' y='44' font-family='Arial' font-size='34' font-weight='bold' fill='white' text-anchor='middle'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ======================= TELA DE LOGIN / CADASTRO ======================= -->
+  <section id="tela-auth" class="auth">
+    <div class="auth-card">
+      <div class="auth-marca">
+        <span class="auth-logo">NEW STAR</span>
+        <span class="auth-logo-2">NOTEBOOK</span>
+      </div>
+      <p class="auth-sub">Ordens de serviço, estoque e financeiro<br>da sua loja, salvos no servidor.</p>
+
+      <div class="auth-abas" role="tablist">
+        <button type="button" class="auth-aba ativa" data-auth-aba="login" role="tab" aria-selected="true">Entrar</button>
+        <button type="button" class="auth-aba" data-auth-aba="registro" role="tab" aria-selected="false">Criar conta</button>
+      </div>
+
+      <form id="form-login" class="form-auth" novalidate>
+        <label for="login-email">E-mail</label>
+        <input id="login-email" type="email" autocomplete="username" placeholder="voce@exemplo.com" required>
+
+        <label for="login-senha">Senha</label>
+        <input id="login-senha" type="password" autocomplete="current-password" placeholder="Sua senha" required>
+
+        <button type="submit" class="btn btn-primario btn-bloco" id="btn-entrar">Entrar</button>
+      </form>
+
+      <form id="form-registro" class="form-auth" hidden novalidate>
+        <label for="reg-nome">Seu nome</label>
+        <input id="reg-nome" autocomplete="name" placeholder="Ex.: João Silva" required>
+
+        <label for="reg-empresa">Nome da loja <span class="opcional">(opcional)</span></label>
+        <input id="reg-empresa" autocomplete="organization" placeholder="Ex.: New Star Notebook">
+
+        <label for="reg-email">E-mail</label>
+        <input id="reg-email" type="email" autocomplete="username" placeholder="voce@exemplo.com" required>
+
+        <label for="reg-senha">Senha <span class="opcional">(mínimo 8 caracteres)</span></label>
+        <input id="reg-senha" type="password" autocomplete="new-password" minlength="8" required>
+
+        <label for="reg-senha2">Repita a senha</label>
+        <input id="reg-senha2" type="password" autocomplete="new-password" required>
+
+        <button type="submit" class="btn btn-primario btn-bloco" id="btn-criar-conta">Criar minha conta</button>
+      </form>
+
+      <p id="auth-msg" class="msg-erro" role="alert" hidden></p>
+
+      <p class="auth-nota">
+        Cada conta tem o seu próprio banco de dados.<br>
+        Os dados de uma conta nunca aparecem para outra.
+      </p>
+    </div>
+    <p class="auth-rodape">New Star Notebook · sistema local com backup em arquivo</p>
+  </section>
+
+  <!-- ============================== APLICATIVO ============================== -->
+  <div id="tela-app" hidden>
+
+    <header class="topo no-print">
+      <div class="topo-marca"><span>NEW STAR</span> NOTEBOOK</div>
+      <div class="topo-usuario">
+        <div class="topo-quem">
+          <strong id="usuario-nome">—</strong>
+          <small id="usuario-empresa"></small>
+        </div>
+        <button class="btn btn-fantasma btn-pequeno" id="btn-sair" type="button">Sair</button>
+      </div>
+    </header>
+
+    <nav class="abas no-print" aria-label="Seções do sistema">
+      <button class="aba ativa" data-aba="servicos" type="button">Ordens de Serviço</button>
+      <button class="aba" data-aba="telefones" type="button">Telefones</button>
+      <button class="aba" data-aba="financeiro" type="button">Financeiro</button>
+      <button class="aba" data-aba="pecas" type="button">Peças e Fontes</button>
+      <button class="aba" data-aba="gerador-os" type="button">+ Gerar OS</button>
+      <button class="aba" data-aba="os-prontas" type="button">OS Prontas</button>
+      <button class="aba" data-aba="notebooks-loja" type="button">Notebooks Loja</button>
+      <button class="aba" data-aba="os-clientes-loja" type="button">OS Cliente Loja</button>
+      <button class="aba" data-aba="backup" type="button">Backup e conta</button>
+    </nav>
+
+    <div id="aviso-legado" class="aviso-legado no-print" hidden>
+      <span id="aviso-legado-texto"></span>
+      <button class="btn btn-secundario btn-pequeno" type="button" id="btn-aviso-importar">Importar para minha conta</button>
+      <button class="btn btn-fantasma btn-pequeno" type="button" id="btn-aviso-fechar" aria-label="Fechar aviso">×</button>
+    </div>
+
+    <main class="conteudo">
+
+      <!-- ===================== 1. ORDENS DE SERVIÇO ===================== -->
+      <section id="servicos" class="aba-conteudo ativa">
+        <div class="secao-topo">
+          <h2>Ordens de Serviço</h2>
+          <span class="contador" id="contador-servicos"></span>
+        </div>
+
+        <div class="busca">
+          <label class="sr-only" for="busca-servicos">Buscar serviços</label>
+          <input type="search" id="busca-servicos" placeholder="Buscar por cliente, nº da OS, notebook ou descrição…" data-busca="servicos">
+        </div>
+
+        <div class="grid-2">
+          <div class="painel">
+            <h3 id="titulo-form-servico">Cadastrar novo serviço</h3>
+            <form id="form-servico" novalidate>
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="srv-nome">Cliente</label>
+                  <input id="srv-nome" required maxlength="120">
+                </div>
+                <div class="campo">
+                  <label for="srv-num">Nº da OS</label>
+                  <input id="srv-num" required maxlength="40" inputmode="numeric">
+                </div>
+              </div>
+
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="srv-status">Status</label>
+                  <select id="srv-status">
+                    <option>Em andamento</option>
+                    <option>Pronto</option>
+                    <option>Entregue</option>
+                  </select>
+                </div>
+                <div class="campo">
+                  <label for="srv-data">Data de entrada</label>
+                  <input id="srv-data" type="date" required>
+                </div>
+              </div>
+
+              <div class="campo">
+                <label for="srv-notebook">Notebook / equipamento</label>
+                <input id="srv-notebook" required maxlength="160" placeholder="Ex.: Lenovo Ideapad 3">
+              </div>
+
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="srv-cfont">C/ fonte</label>
+                  <select id="srv-cfont"><option>Sim</option><option selected>Não</option></select>
+                </div>
+                <div class="campo">
+                  <label for="srv-cmaleta">C/ maleta</label>
+                  <select id="srv-cmaleta"><option>Sim</option><option selected>Não</option></select>
+                </div>
+                <div class="campo">
+                  <label for="srv-local">Local / com quem</label>
+                  <input id="srv-local" maxlength="160">
+                </div>
+              </div>
+
+              <div class="campo">
+                <label for="srv-desc">Descrição / defeito relatado</label>
+                <textarea id="srv-desc" rows="2" maxlength="2000"></textarea>
+              </div>
+
+              <div class="acoes-form">
+                <button type="submit" class="btn btn-primario" id="btn-salvar-servico">Salvar serviço</button>
+                <button type="button" class="btn btn-fantasma" id="btn-cancelar-servico" hidden>Cancelar edição</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="painel painel-largo">
+            <h3>Lista de serviços</h3>
+            <div class="tabela-rolagem">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Cliente</th>
+                    <th>Nº</th>
+                    <th>Status</th>
+                    <th>Notebook</th>
+                    <th>Fonte</th>
+                    <th>Maleta</th>
+                    <th>Entrada</th>
+                    <th>Descrição</th>
+                    <th>Local</th>
+                    <th class="col-acoes">Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="tabela-servicos-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================= 2. TELEFONES ========================= -->
+      <section id="telefones" class="aba-conteudo" hidden>
+        <div class="secao-topo">
+          <h2>Telefones</h2>
+          <span class="contador" id="contador-telefones"></span>
+        </div>
+
+        <div class="busca">
+          <label class="sr-only" for="busca-telefones">Buscar contatos</label>
+          <input type="search" id="busca-telefones" placeholder="Buscar por nome ou telefone…" data-busca="telefones">
+        </div>
+
+        <div class="grid-2">
+          <div class="painel">
+            <h3 id="titulo-form-telefone">Adicionar contato</h3>
+            <form id="form-telefone" novalidate>
+              <div class="campo">
+                <label for="tel-nome">Nome</label>
+                <input id="tel-nome" required maxlength="120">
+              </div>
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="tel-1">Telefone 1</label>
+                  <input id="tel-1" required maxlength="40" inputmode="tel" placeholder="(11) 90000-0000">
+                </div>
+                <div class="campo">
+                  <label for="tel-2">Telefone 2</label>
+                  <input id="tel-2" maxlength="40" inputmode="tel">
+                </div>
+              </div>
+              <div class="acoes-form">
+                <button type="submit" class="btn btn-primario" id="btn-salvar-telefone">Salvar contato</button>
+                <button type="button" class="btn btn-fantasma" id="btn-cancelar-telefone" hidden>Cancelar edição</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="painel">
+            <h3>Lista de contatos</h3>
+            <div class="tabela-rolagem">
+              <table>
+                <thead>
+                  <tr><th>Nome</th><th>Telefone 1</th><th>Telefone 2</th><th class="col-acoes">Ações</th></tr>
+                </thead>
+                <tbody id="tabela-telefones-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================= 3. FINANCEIRO ========================= -->
+      <section id="financeiro" class="aba-conteudo" hidden>
+        <div class="secao-topo">
+          <h2>Financeiro</h2>
+          <span class="contador" id="contador-financeiro"></span>
+        </div>
+
+        <div class="cartoes-fin">
+          <div class="cartao-fin devendo">
+            <span>A receber (devendo)</span>
+            <strong id="total-devendo">R$ 0,00</strong>
+          </div>
+          <div class="cartao-fin pago">
+            <span>Recebido (pago)</span>
+            <strong id="total-pago">R$ 0,00</strong>
+          </div>
+        </div>
+
+        <div class="busca">
+          <label class="sr-only" for="busca-financeiro">Buscar lançamentos</label>
+          <input type="search" id="busca-financeiro" placeholder="Buscar por nome, notebook ou referente…" data-busca="financeiro">
+        </div>
+
+        <div class="grid-2">
+          <div class="painel">
+            <h3 id="titulo-form-financeiro">Adicionar lançamento</h3>
+            <form id="form-financeiro" novalidate>
+              <div class="campo">
+                <label for="fin-nome">Cliente</label>
+                <input id="fin-nome" required maxlength="120">
+              </div>
+
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="fin-status">Status</label>
+                  <select id="fin-status">
+                    <option value="DEVENDO">DEVENDO</option>
+                    <option value="PAGO">PAGO</option>
+                  </select>
+                </div>
+                <div class="campo">
+                  <label for="fin-valor">Valor (R$)</label>
+                  <input id="fin-valor" required inputmode="decimal" placeholder="0,00">
+                </div>
+              </div>
+
+              <div class="campo">
+                <label for="fin-notebook">Notebook</label>
+                <input id="fin-notebook" required maxlength="160">
+              </div>
+              <div class="campo">
+                <label for="fin-referente">Referente</label>
+                <input id="fin-referente" maxlength="200" placeholder="Ex.: troca de tela">
+              </div>
+
+              <div class="acoes-form">
+                <button type="submit" class="btn btn-primario" id="btn-salvar-financeiro">Salvar lançamento</button>
+                <button type="button" class="btn btn-fantasma" id="btn-cancelar-financeiro" hidden>Cancelar edição</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="painel">
+            <h3>Lista financeira</h3>
+            <div class="tabela-rolagem">
+              <table>
+                <thead>
+                  <tr><th>Cliente</th><th>Status</th><th>Valor</th><th>Notebook</th><th>Ref.</th><th class="col-acoes">Ações</th></tr>
+                </thead>
+                <tbody id="tabela-financeiro-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================== 4. PEÇAS E FONTES ======================== -->
+      <section id="pecas" class="aba-conteudo" hidden>
+        <div class="secao-topo">
+          <h2>Peças e fontes</h2>
+          <span class="contador" id="contador-pecas"></span>
+        </div>
+
+        <div class="busca">
+          <label class="sr-only" for="busca-pecas">Buscar peças</label>
+          <input type="search" id="busca-pecas" placeholder="Buscar por cliente ou item…" data-busca="pecas">
+        </div>
+
+        <div class="grid-2">
+          <div class="painel">
+            <h3 id="titulo-form-peca">Adicionar peça / fonte</h3>
+            <form id="form-pecas" novalidate>
+              <div class="campo">
+                <label for="pec-cliente">Cliente</label>
+                <input id="pec-cliente" required maxlength="160">
+              </div>
+              <div class="campo">
+                <label for="pec-item">Item / peça</label>
+                <input id="pec-item" required maxlength="300" placeholder="Ex.: fonte 20V 3,25A">
+              </div>
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="pec-data">Data</label>
+                  <input id="pec-data" type="date" required>
+                </div>
+                <div class="campo">
+                  <label for="pec-status">Status</label>
+                  <select id="pec-status">
+                    <option>Não devolvido</option>
+                    <option>Devolvido</option>
+                  </select>
+                </div>
+              </div>
+              <div class="acoes-form">
+                <button type="submit" class="btn btn-primario" id="btn-salvar-peca">Salvar peça</button>
+                <button type="button" class="btn btn-fantasma" id="btn-cancelar-peca" hidden>Cancelar edição</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="painel">
+            <h3>Lista de peças</h3>
+            <div class="tabela-rolagem">
+              <table>
+                <thead>
+                  <tr><th>Cliente</th><th>Item</th><th>Data</th><th>Status</th><th class="col-acoes">Ações</th></tr>
+                </thead>
+                <tbody id="tabela-pecas-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================== 5. GERADOR DE OS ======================== -->
+      <section id="gerador-os" class="aba-conteudo" hidden>
+        <div class="secao-topo">
+          <h2>Gerador de ordem de serviço</h2>
+          <span class="contador" id="status-os-editando"></span>
+        </div>
+
+        <form id="form-gerador-os" class="painel painel-form" novalidate>
+          <div class="os-titulo">Seus dados (prestador)</div>
+          <div class="grid-2">
+            <div class="campo"><label for="os-prestador-nome">Nome / empresa</label><input id="os-prestador-nome" value="New Star Notebook" required maxlength="120"></div>
+            <div class="campo"><label for="os-prestador-doc">CPF / CNPJ</label><input id="os-prestador-doc" maxlength="30"></div>
+            <div class="campo"><label for="os-prestador-tel">Telefone / WhatsApp</label><input id="os-prestador-tel" maxlength="40"></div>
+            <div class="campo"><label for="os-prestador-email">E-mail</label><input id="os-prestador-email" type="email" maxlength="120"></div>
+          </div>
+
+          <div class="os-titulo">Dados do cliente</div>
+          <div class="grid-2">
+            <div class="campo"><label for="os-cliente-nome">Nome do cliente</label><input id="os-cliente-nome" required maxlength="120"></div>
+            <div class="campo"><label for="os-cliente-tel">Telefone do cliente</label><input id="os-cliente-tel" maxlength="40"></div>
+            <div class="campo campo-duplo"><label for="os-cliente-end">Endereço do cliente</label><input id="os-cliente-end" maxlength="200"></div>
+          </div>
+
+          <div class="os-titulo">Equipamento e serviço</div>
+          <div class="grid-3">
+            <div class="campo"><label for="os-numero">Número da OS</label><input id="os-numero" required maxlength="40" inputmode="numeric"></div>
+            <div class="campo"><label for="os-data-entrada">Data de entrada</label><input id="os-data-entrada" type="date" required></div>
+            <div class="campo"><label for="os-data-previsao">Previsão de entrega</label><input id="os-data-previsao" type="date"></div>
+          </div>
+
+          <div class="grid-2">
+            <div class="campo"><label for="os-equipamento">Equipamento / objeto</label><input id="os-equipamento" required maxlength="200"></div>
+            <div class="campo">
+              <label for="os-garantia">Prazo de garantia</label>
+              <select id="os-garantia">
+                <option>30 dias</option>
+                <option>90 dias</option>
+                <option>Sem garantia</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="campo">
+            <label for="os-problema">Problema relatado pelo cliente</label>
+            <textarea id="os-problema" rows="2" maxlength="2000"></textarea>
+          </div>
+
+          <div class="campo">
+            <label for="os-servico-exec">Serviço executado / diagnóstico</label>
+            <textarea id="os-servico-exec" rows="2" maxlength="2000"></textarea>
+          </div>
+
+          <div class="os-titulo">Itens, peças e valores</div>
+          <div class="campo">
+            <label for="os-itens">Descrição do item / serviço e valor total (R$)</label>
+            <input id="os-itens" required maxlength="500" placeholder="Ex.: Troca de tela — R$ 250,00">
+          </div>
+
+          <div class="os-titulo">Observações / condições de pagamento</div>
+          <div class="campo">
+            <textarea id="os-obs" rows="2" maxlength="2000" placeholder="Ex.: pagamento à vista, 50% na aprovação…"></textarea>
+          </div>
+        </form>
+
+        <div class="acoes no-print">
+          <button type="button" class="btn btn-primario" id="btn-salvar-os">Salvar OS e baixar PDF</button>
+          <button type="button" class="btn btn-secundario" id="btn-imprimir-os">Imprimir</button>
+          <button type="button" class="btn btn-fantasma" id="btn-limpar-os">Limpar formulário</button>
+        </div>
+      </section>
+
+      <!-- ========================= 6. OS PRONTAS ========================= -->
+      <section id="os-prontas" class="aba-conteudo" hidden>
+        <div class="secao-topo">
+          <h2>OS prontas</h2>
+          <span class="contador" id="contador-os"></span>
+        </div>
+
+        <div class="busca">
+          <label class="sr-only" for="busca-os">Buscar OS</label>
+          <input type="search" id="busca-os" placeholder="Buscar por cliente, número ou equipamento…" data-busca="os">
+        </div>
+
+        <div class="painel">
+          <div class="tabela-rolagem">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Nº</th>
+                  <th>Equipamento</th>
+                  <th>Data</th>
+                  <th>Serviço executado</th>
+                  <th>Valor / itens</th>
+                  <th class="col-acoes">Ações</th>
+                </tr>
+              </thead>
+              <tbody id="tabela-os-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================== 7. NOTEBOOKS LOJA ======================== -->
+      <section id="notebooks-loja" class="aba-conteudo" hidden>
+        <div class="secao-topo">
+          <h2>Notebooks da loja</h2>
+          <span class="contador" id="contador-notebooks"></span>
+        </div>
+
+        <div class="busca no-print">
+          <label class="sr-only" for="busca-notebooks">Buscar notebooks</label>
+          <input type="search" id="busca-notebooks" placeholder="Buscar por marca, modelo, processador…" data-busca="notebooks">
+        </div>
+
+        <div class="grid-2 no-print">
+          <div class="painel">
+            <h3 id="titulo-form-notebook">Cadastrar notebook</h3>
+            <form id="form-notebook" novalidate>
+              <input type="hidden" id="nb-id" value="">
+
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="nb-notebook">Marca</label>
+                  <input id="nb-notebook" required maxlength="160" placeholder="Ex.: LENOVO">
+                </div>
+                <div class="campo">
+                  <label for="nb-modelo">Modelo</label>
+                  <input id="nb-modelo" required maxlength="120" placeholder="Ex.: Ideapad 3">
+                </div>
+              </div>
+
+              <div class="campo">
+                <label for="nb-processador">Processador</label>
+                <input id="nb-processador" maxlength="120" placeholder="Ex.: Ryzen 5 5500U">
+              </div>
+
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="nb-memoria">Memória</label>
+                  <input id="nb-memoria" maxlength="120" placeholder="Ex.: 8GB DDR4">
+                </div>
+                <div class="campo">
+                  <label for="nb-tela">Tela</label>
+                  <input id="nb-tela" maxlength="120" placeholder="Ex.: 15,6&quot; Full HD">
+                </div>
+              </div>
+
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="nb-nvme">NVMe</label>
+                  <input id="nb-nvme" maxlength="120" placeholder="Ex.: 256GB">
+                </div>
+                <div class="campo">
+                  <label for="nb-ssd">SSD</label>
+                  <input id="nb-ssd" maxlength="120" placeholder="Ex.: 480GB">
+                </div>
+              </div>
+
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="nb-bateria">Bateria</label>
+                  <input id="nb-bateria" maxlength="120" placeholder="Ex.: boa, 2h">
+                </div>
+                <div class="campo">
+                  <label for="nb-video">Vídeo</label>
+                  <input id="nb-video" maxlength="120" placeholder="Ex.: Vega 6">
+                </div>
+              </div>
+
+              <div class="form-linha">
+                <div class="campo">
+                  <label for="nb-preco">Preço / condições</label>
+                  <input id="nb-preco" maxlength="120" placeholder="Ex.: R$ 1.600,00 (4x sem juros)">
+                </div>
+                <div class="campo">
+                  <label for="nb-status">Situação</label>
+                  <select id="nb-status">
+                    <option>Disponível</option>
+                    <option>Reservado</option>
+                    <option>Vendido</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="acoes-form">
+                <button type="submit" class="btn btn-primario" id="btn-salvar-nb">Salvar notebook</button>
+                <button type="button" class="btn btn-fantasma" id="btn-cancelar-nb" hidden>Cancelar edição</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="painel">
+            <div class="painel-topo">
+              <h3>Estoque</h3>
+              <button type="button" class="btn btn-secundario btn-pequeno" id="btn-imprimir-estoque">Imprimir lista</button>
+            </div>
+
+            <div class="tabela-rolagem">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Notebook</th>
+                    <th>Modelo</th>
+                    <th>Processador</th>
+                    <th>RAM</th>
+                    <th>Armazenamento</th>
+                    <th>Preço</th>
+                    <th>Situação</th>
+                    <th class="col-acoes">Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="tabela-notebooks-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="area-relatorio-estoque" class="relatorio-print-only">
+          <div class="relatorio-topo">
+            <h1>NEW STAR NOTEBOOK</h1>
+            <h2>Relatório de estoque de notebooks</h2>
+            <p id="relatorio-data"></p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Notebook</th><th>Modelo</th><th>Processador</th><th>RAM</th><th>Tela</th><th>Armazenamento</th><th>Preço</th><th>Situação</th>
+              </tr>
+            </thead>
+            <tbody id="tabela-relatorio-estoque-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ======================= 8. OS CLIENTE LOJA ======================= -->
+      <section id="os-clientes-loja" class="aba-conteudo" hidden>
+        <div class="secao-topo">
+          <h2>OS do cliente</h2>
+        </div>
+
+        <div class="painel painel-form" id="area-impressao-os-cliente">
+          <div class="os-cliente-topo">
+            <div class="os-cliente-marca">NEW STAR <span>NOTEBOOK</span></div>
+            <div class="os-cliente-tipo">ORDEM DE SERVIÇO DO CLIENTE</div>
+          </div>
+
+          <form id="form-os-cliente" novalidate>
+            <div class="form-linha">
+              <div class="campo"><label for="oscl-nome">Nome</label><input id="oscl-nome" required maxlength="120"></div>
+              <div class="campo"><label for="oscl-num">Nº da OS</label><input id="oscl-num" required maxlength="40" inputmode="numeric"></div>
+            </div>
+
+            <div class="form-linha">
+              <div class="campo"><label for="oscl-telefone">Telefone</label><input id="oscl-telefone" maxlength="40"></div>
+              <div class="campo">
+                <label for="oscl-status">Status</label>
+                <select id="oscl-status">
+                  <option>Em andamento</option>
+                  <option>Pronto</option>
+                  <option>Entregue</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="campo"><label for="oscl-notebook">Notebook / equipamento</label><input id="oscl-notebook" required maxlength="160"></div>
+
+            <div class="form-linha">
+              <div class="campo"><label for="oscl-cfont">C/ fonte</label><select id="oscl-cfont"><option>Sim</option><option selected>Não</option></select></div>
+              <div class="campo"><label for="oscl-cmaleta">C/ maleta</label><select id="oscl-cmaleta"><option>Sim</option><option selected>Não</option></select></div>
+            </div>
+
+            <div class="campo"><label for="oscl-desc">Descrição</label><textarea id="oscl-desc" rows="3" maxlength="2000"></textarea></div>
+
+            <div class="form-linha">
+              <div class="campo"><label for="oscl-data">Data de entrada</label><input id="oscl-data" type="date" required></div>
+              <div class="campo"><label for="oscl-local">Local / com quem</label><input id="oscl-local" maxlength="160"></div>
+            </div>
+          </form>
+        </div>
+
+        <div class="acoes no-print">
+          <button type="button" class="btn btn-primario" id="btn-imprimir-os-cliente">Imprimir OS</button>
+          <button type="button" class="btn btn-fantasma" id="btn-limpar-os-cliente">Limpar</button>
+        </div>
+      </section>
+
+      <!-- ======================= 9. BACKUP E CONTA ======================= -->
+      <section id="backup" class="aba-conteudo" hidden>
+        <div class="secao-topo">
+          <h2>Backup e conta</h2>
+        </div>
+
+        <div class="grid-2">
+          <div class="painel">
+            <h3>Sua conta</h3>
+            <dl class="lista-definicao">
+              <div><dt>Nome</dt><dd id="conta-nome">—</dd></div>
+              <div><dt>Loja</dt><dd id="conta-empresa">—</dd></div>
+              <div><dt>E-mail</dt><dd id="conta-email">—</dd></div>
+              <div><dt>Conta criada em</dt><dd id="conta-criada">—</dd></div>
+            </dl>
+            <button type="button" class="btn btn-fantasma btn-bloco" id="btn-sair-2">Sair da conta</button>
+          </div>
+
+          <div class="painel">
+            <h3>Baixar backup</h3>
+            <p class="texto-ajuda">
+              O arquivo contém <strong>somente os dados desta conta</strong>. Guarde uma cópia fora do computador da loja.
+            </p>
+            <div class="acoes-form">
+              <button type="button" class="btn btn-primario" id="btn-baixar-sqlite">Baixar banco (.sqlite)</button>
+              <button type="button" class="btn btn-secundario" id="btn-baixar-json">Baixar JSON</button>
+            </div>
+            <p class="texto-mini" id="info-registros">—</p>
+          </div>
+
+          <div class="painel">
+            <h3>Restaurar de um arquivo</h3>
+            <p class="texto-ajuda">
+              Selecione um backup <code>.sqlite</code> ou <code>.json</code>. A restauração
+              <strong>substitui</strong> os dados atuais desta conta.
+            </p>
+            <div class="campo">
+              <label class="sr-only" for="arquivo-restaurar">Arquivo de backup</label>
+              <input type="file" id="arquivo-restaurar" accept=".sqlite,.db,.json">
+            </div>
+            <button type="button" class="btn btn-secundario" id="btn-restaurar-arquivo">Restaurar do arquivo</button>
+          </div>
+
+          <div class="painel">
+            <h3>Nuvem (opcional)</h3>
+            <p class="texto-ajuda" id="nuvem-status">Verificando…</p>
+            <div class="acoes-form">
+              <button type="button" class="btn btn-secundario" id="btn-enviar-nuvem">Enviar backup para a nuvem</button>
+              <button type="button" class="btn btn-fantasma" id="btn-restaurar-nuvem">Restaurar da nuvem</button>
+            </div>
+            <p class="texto-mini" id="nuvem-ultimo"></p>
+          </div>
+
+          <div class="painel">
+            <h3>Dados antigos deste navegador</h3>
+            <p class="texto-ajuda" id="legado-info">Verificando…</p>
+            <button type="button" class="btn btn-secundario" id="btn-importar-legado">Importar para minha conta</button>
+          </div>
+
+          <div class="painel">
+            <h3>Últimas ações</h3>
+            <ul class="auditoria" id="lista-auditoria"></ul>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ====================== NOTIFICAÇÕES E DIÁLOGO ====================== -->
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <dialog id="dialogo-confirmar" class="dialogo">
+    <form method="dialog">
+      <h3 id="dialogo-titulo">Confirmar</h3>
+      <p id="dialogo-texto"></p>
+      <div class="dialogo-acoes">
+        <button type="submit" value="cancelar" class="btn btn-fantasma" id="dialogo-cancelar">Cancelar</button>
+        <button type="submit" value="confirmar" class="btn btn-perigo" id="dialogo-ok">Confirmar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Áreas exclusivas de impressão -->
+  <div id="area-impressao-etiqueta" class="etiqueta-print-only"></div>
+  <div id="documento-os" class="documento-print-only"></div>
+
+  <script src="vendor/html2pdf.bundle.min.js" defer></script>
+  <script src="script.js" defer></script>
+</body>
+</html>

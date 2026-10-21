@@ -1,0 +1,20 @@
+# Dependências
+node_modules/
+
+# Banco e backups locais (nunca versionar dados de clientes)
+data/
+backups/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# Configuração sensível
+.env
+.env.local
+
+# Logs e temporários
+*.log
+.DS_Store
+Thumbs.db
