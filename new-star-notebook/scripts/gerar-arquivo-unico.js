@@ -12,7 +12,7 @@
  *   - os ajustes de interface do modo arquivo único
  *
  * Uso: npm run html-unico
- * Saída: dist/new-star-notebook.html
+ * Saída: download/new-star-notebook.html
  */
 
 const fs = require('fs');
@@ -116,7 +116,7 @@ function principal() {
     `<!DOCTYPE html>\n${aviso}\n<script>${seguroParaTagScript(shim)}</script>`
   );
 
-  const pastaSaida = path.join(raiz, 'dist');
+  const pastaSaida = path.join(raiz, 'download');
   fs.mkdirSync(pastaSaida, { recursive: true });
 
   const destino = path.join(pastaSaida, 'new-star-notebook.html');

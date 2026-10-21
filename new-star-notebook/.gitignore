@@ -14,9 +14,6 @@ backups/
 .env
 .env.local
 
-# Arquivo único gerado por scripts/gerar-arquivo-unico.js
-dist/
-
 # Logs e temporários
 *.log
 .DS_Store

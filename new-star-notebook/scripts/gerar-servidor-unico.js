@@ -3,7 +3,7 @@
 /**
  * Gera o servidor em UM ÚNICO ARQUIVO JavaScript.
  *
- * Junta em `dist/new-star-notebook-servidor.js`:
+ * Junta em `download/new-star-notebook-servidor.js`:
  *   - config.js, lib/*.js e server.js (backend completo)
  *   - a interface (public/index.html, style.css, script.js e html2pdf)
  *
@@ -343,7 +343,7 @@ function montar() {
     fim,
   ].join('\n');
 
-  const pastaSaida = path.join(raiz, 'dist');
+  const pastaSaida = path.join(raiz, 'download');
   fs.mkdirSync(pastaSaida, { recursive: true });
 
   const destino = path.join(pastaSaida, 'new-star-notebook-servidor.js');

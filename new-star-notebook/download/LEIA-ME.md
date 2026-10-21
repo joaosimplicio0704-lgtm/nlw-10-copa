@@ -1,0 +1,64 @@
+# 📥 Arquivos para baixar
+
+Aqui estão as versões prontas do **New Star Notebook 2.0.1** em arquivo único.
+
+## 1. `new-star-notebook.html` — o mais simples
+
+Sistema completo em **um arquivo HTML**. Não precisa instalar nada.
+
+1. Baixe o arquivo (no GitHub: abra o arquivo e clique em **Download raw file**).
+2. Dê **dois cliques** nele (Chrome, Edge ou Firefox).
+3. Entre com:
+
+| E-mail | Senha | O que tem |
+|---|---|---|
+| `ana@teste.com` | `senha12345` | dados de exemplo |
+| `bruno@teste.com` | `senha12345` | conta vazia |
+
+Os dados ficam salvos **neste navegador**. O backup é em `.json` (aba **Backup e conta**).
+
+## 2. `new-star-notebook-servidor.js` — o completo
+
+Sistema completo em **um arquivo JavaScript**, com banco SQLite, backup `.sqlite`, restauração e
+backup em nuvem.
+
+Requisitos: Node.js 18+ e as bibliotecas `express` e `sql.js`.
+
+```bash
+npm install express sql.js
+node new-star-notebook-servidor.js
+```
+
+Abra `http://localhost:3000`. As contas de demonstração são criadas automaticamente:
+
+- `ana@teste.com` / `senha12345` (com dados)
+- `bruno@teste.com` / `senha12345` (vazia)
+
+Os dados ficam nas pastas `data/` e `backups/`, criadas ao lado do arquivo.
+
+## 3. Quer a pasta completa (com `node_modules`)?
+
+Baixe o `new-star-notebook-2.0.1-pronto.zip` que fica na raiz do projeto (fora desta pasta) ou use
+**Code → Download ZIP** no GitHub para o repositório inteiro.
+
+## Qual escolher?
+
+| | `.html` | `.js` |
+|---|---|---|
+| Instalar algo | não | `npm install express sql.js` |
+| Onde ficam os dados | navegador | computador (SQLite) |
+| Backup `.sqlite` | não (só `.json`) | sim |
+| Nuvem (Supabase/WebDAV) | não | sim |
+| Vários computadores | não | sim |
+| Serve para demonstração / 1 PC | ✅ | ✅ |
+| Serve para a loja | ❌ | ✅ |
+
+## Como gerar de novo
+
+Na pasta do projeto:
+
+```bash
+npm run html-unico        # gera download/new-star-notebook.html
+npm run servidor-unico    # gera download/new-star-notebook-servidor.js
+npm run pacote            # gera os dois + o .zip desta pasta
+```

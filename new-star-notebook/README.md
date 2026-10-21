@@ -48,6 +48,24 @@ estavam no `localStorage`.
 
 ---
 
+## Baixar pronto
+
+Na pasta [`download/`](./download/) ficam as versões prontas em **arquivo único**:
+
+| Arquivo | O que é |
+|---|---|
+| `new-star-notebook.html` | Sistema completo em um HTML. Dois cliques, sem instalar nada. |
+| `new-star-notebook-servidor.js` | Sistema completo em um `.js`, com SQLite, backup `.sqlite` e nuvem. |
+| `new-star-notebook-2.0.1.zip` | Os dois arquivos acima + instruções. |
+| `new-star-notebook-2.0.1-projeto.zip` | Projeto com os arquivos separados (rode `npm install` uma vez). |
+
+No GitHub, para baixar: abra a pasta `download/`, entre no arquivo e clique em **Download raw file**.
+Para o repositório inteiro: **Code → Download ZIP**.
+
+Para regenerar tudo: `npm run pacote`.
+
+---
+
 ## Como rodar
 
 Pré-requisito: **Node.js 18.17 ou superior** (recomendado Node 20+).
@@ -77,8 +95,9 @@ O arquivo do banco fica em `data/newstar.sqlite` e **não é versionado** (veja 
 | `npm test` | Roda o teste rápido da API (isolamento, backup, importação) |
 | `npm run backup` | Cria um backup do banco completo em `backups/` |
 | `npm run demo` | Cria contas de demonstração com dados de exemplo (só em banco vazio) |
-| `npm run html-unico` | Gera a versão de arquivo único em `dist/new-star-notebook.html` |
-| `npm run servidor-unico` | Gera o servidor completo em um único `.js` em `dist/` |
+| `npm run html-unico` | Gera a versão de arquivo único em `download/new-star-notebook.html` |
+| `npm run servidor-unico` | Gera o servidor completo em um único `.js` em `download/` |
+| `npm run pacote` | Gera os dois arquivos acima + os `.zip` em `download/` |
 
 ---
 
@@ -101,7 +120,7 @@ Além do sistema com servidor, existe uma versão que é **um único arquivo `.h
 cliques, sem Node.js, sem instalar nada e sem internet.
 
 ```bash
-npm run html-unico      # gera dist/new-star-notebook.html
+npm run html-unico      # gera download/new-star-notebook.html
 ```
 
 O arquivo já contém a interface, o CSS, o `html2pdf` e um "servidor" que roda dentro do navegador
@@ -134,7 +153,7 @@ Se você quer **um só arquivo de código** mas com todos os recursos do servido
 backup `.sqlite`/`.json`, restauração e nuvem), gere:
 
 ```bash
-npm run servidor-unico     # gera dist/new-star-notebook-servidor.js
+npm run servidor-unico     # gera download/new-star-notebook-servidor.js
 ```
 
 Depois:
@@ -437,6 +456,7 @@ new-star-notebook/
 │   └── vendor/html2pdf.bundle.min.js
 ├── scripts/backup.js
 ├── tests/smoke.js
+├── download/                # versões prontas para baixar (geradas)
 ├── legacy-versao-1/         # arquivos originais, só para referência
 ├── data/                    # banco (fora do Git)
 ├── backups/                 # backups do servidor (fora do Git)
