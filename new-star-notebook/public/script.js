@@ -174,6 +174,7 @@ const estado = {
   nuvem: { configurada: false, provedor: null, ultimoEnvio: null },
   auditoria: [],
   abaAtual: 'servicos',
+  iniciando: true,
   editandoNotebookId: null,
   editandoServicoId: null,
   editandoTelefoneId: null,
@@ -220,13 +221,15 @@ async function api(metodo, caminho, corpo, { semAutenticacao = false, tentativa 
       return api(metodo, caminho, corpo, { semAutenticacao, tentativa: tentativa + 1 });
     }
 
-    if (estado.token) {
-      encerrarSessaoLocal('Sua sessão expirou. Entre novamente.');
-      const erro = new Error('Sua sessão expirou. Entre novamente.');
-      erro.status = 401;
-      erro.silencioso = true;
-      throw erro;
-    }
+    // Só mostra "sessão expirou" para quem já estava dentro do sistema
+    // (na abertura da página, um token antigo volta ao login em silêncio).
+    const estavaLogado = !estado.iniciando && Boolean(estado.token || estado.usuario);
+    if (estavaLogado) encerrarSessaoLocal('Sua sessão expirou. Entre novamente.');
+
+    const erro = new Error('Sua sessão expirou. Entre novamente.');
+    erro.status = 401;
+    erro.silencioso = true;
+    throw erro;
   }
 
   if (!resposta.ok) {
@@ -311,6 +314,8 @@ async function iniciar() {
     } else {
       toast(erro.message, 'erro');
     }
+  } finally {
+    estado.iniciando = false;
   }
 }
 
@@ -442,7 +447,8 @@ async function criarConta(evento) {
 
 async function sair() {
   try {
-    if (estado.token) await api('POST', '/api/auth/sair');
+    // Mesmo sem token no localStorage, o cookie HttpOnly identifica a sessão.
+    await api('POST', '/api/auth/sair');
   } catch (_) {
     // se falhar, encerra localmente de qualquer forma
   }
