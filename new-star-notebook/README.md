@@ -15,6 +15,7 @@ estavam no `localStorage`.
 
 - [O que mudou](#o-que-mudou)
 - [Como rodar](#como-rodar)
+- [Versão de arquivo único](#versão-de-arquivo-único-um-html)
 - [Contas e isolamento dos dados](#contas-e-isolamento-dos-dados)
 - [Backup e restauração](#backup-e-restauração)
 - [Backup em nuvem (opcional)](#backup-em-nuvem-opcional)
@@ -75,6 +76,7 @@ O arquivo do banco fica em `data/newstar.sqlite` e **não é versionado** (veja 
 | `npm test` | Roda o teste rápido da API (isolamento, backup, importação) |
 | `npm run backup` | Cria um backup do banco completo em `backups/` |
 | `npm run demo` | Cria contas de demonstração com dados de exemplo (só em banco vazio) |
+| `npm run html-unico` | Gera a versão de arquivo único em `dist/new-star-notebook.html` |
 
 ---
 
@@ -88,6 +90,39 @@ O comando `npm run demo` cria duas contas (apenas se o banco ainda não tiver ne
 | `bruno@teste.com` | `senha12345` | conta vazia, útil para ver o isolamento |
 
 Para recomeçar do zero, apague a pasta `data/` e rode `npm start` (banco vazio) ou `npm run demo`.
+
+---
+
+## Versão de arquivo único (um `.html`)
+
+Além do sistema com servidor, existe uma versão que é **um único arquivo `.html`** — abre com dois
+cliques, sem Node.js, sem instalar nada e sem internet.
+
+```bash
+npm run html-unico      # gera dist/new-star-notebook.html
+```
+
+O arquivo já contém a interface, o CSS, o `html2pdf` e um "servidor" que roda dentro do navegador
+e responde às mesmas rotas `/api/*`, guardando tudo no `localStorage`.
+
+**O que funciona igual:** login, cadastro, contas separadas (cada login vê só os próprios dados),
+serviços/OS, contatos, financeiro, peças, estoque, impressão, PDF e backup em `.json`.
+
+**O que muda:**
+
+| No servidor | Arquivo único |
+|---|---|
+| Dados em SQLite no computador servidor | Dados no `localStorage` **deste navegador** |
+| Backup `.sqlite` e `.json` | Backup apenas `.json` |
+| Backup em nuvem (Supabase/WebDAV) | Não disponível |
+| Vários computadores acessam o mesmo banco | Cada navegador tem os seus dados |
+| Senha protegida no servidor | Senha com hash no navegador — separa contas, mas não protege contra quem usa o mesmo computador |
+
+Use a versão de arquivo único para demonstração, uso em um único computador ou para levar no pen
+drive. Para a loja com vários computadores e backup em nuvem, use a versão com servidor.
+
+Contas de demonstração no arquivo único: `ana@teste.com` e `bruno@teste.com`, senha `senha12345`.
+Para apagar tudo e recomeçar, abra o console do navegador (F12) e rode `NewStarArquivoUnico.zerar()`.
 
 ---
 
