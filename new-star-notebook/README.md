@@ -16,6 +16,7 @@ estavam no `localStorage`.
 - [O que mudou](#o-que-mudou)
 - [Como rodar](#como-rodar)
 - [Versão de arquivo único](#versão-de-arquivo-único-um-html)
+- [Versão de um único arquivo .js (servidor completo)](#versão-de-um-único-arquivo-js-servidor-completo)
 - [Contas e isolamento dos dados](#contas-e-isolamento-dos-dados)
 - [Backup e restauração](#backup-e-restauração)
 - [Backup em nuvem (opcional)](#backup-em-nuvem-opcional)
@@ -77,6 +78,7 @@ O arquivo do banco fica em `data/newstar.sqlite` e **não é versionado** (veja 
 | `npm run backup` | Cria um backup do banco completo em `backups/` |
 | `npm run demo` | Cria contas de demonstração com dados de exemplo (só em banco vazio) |
 | `npm run html-unico` | Gera a versão de arquivo único em `dist/new-star-notebook.html` |
+| `npm run servidor-unico` | Gera o servidor completo em um único `.js` em `dist/` |
 
 ---
 
@@ -123,6 +125,42 @@ drive. Para a loja com vários computadores e backup em nuvem, use a versão com
 
 Contas de demonstração no arquivo único: `ana@teste.com` e `bruno@teste.com`, senha `senha12345`.
 Para apagar tudo e recomeçar, abra o console do navegador (F12) e rode `NewStarArquivoUnico.zerar()`.
+
+---
+
+## Versão de um único arquivo `.js` (servidor completo)
+
+Se você quer **um só arquivo de código** mas com todos os recursos do servidor (banco SQLite,
+backup `.sqlite`/`.json`, restauração e nuvem), gere:
+
+```bash
+npm run servidor-unico     # gera dist/new-star-notebook-servidor.js
+```
+
+Depois:
+
+```bash
+node new-star-notebook-servidor.js
+```
+
+O arquivo tem o backend completo **e a interface embutida** (HTML, CSS, JS e o gerador de PDF).
+Ele cria sozinho as pastas `data/` e `backups/` ao lado de onde estiver, e no primeiro uso cria as
+contas de demonstração (`ana@teste.com` / `bruno@teste.com`, senha `senha12345`).
+
+Únicas dependências externas: `express` e `sql.js` (bibliotecas de terceiros).
+
+```bash
+npm install express sql.js
+```
+
+| | Vários arquivos (projeto) | Um único `.js` | Um único `.html` |
+|---|---|---|---|
+| Manutenção/leitura | melhor | código empacotado | código empacotado |
+| Instalar | `npm install` | `npm install express sql.js` | nada |
+| Banco | SQLite no computador | SQLite no computador | navegador |
+| Backup `.sqlite` | sim | sim | não (só `.json`) |
+| Nuvem | sim | sim | não |
+| Vários computadores | sim | sim | não |
 
 ---
 

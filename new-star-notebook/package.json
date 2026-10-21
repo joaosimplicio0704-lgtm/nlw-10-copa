@@ -13,7 +13,8 @@
     "backup": "node scripts/backup.js",
     "test": "node tests/smoke.js",
     "demo": "node scripts/demo.js",
-    "html-unico": "node scripts/gerar-arquivo-unico.js"
+    "html-unico": "node scripts/gerar-arquivo-unico.js",
+    "servidor-unico": "node scripts/gerar-servidor-unico.js"
   },
   "dependencies": {
     "express": "^4.21.2",
