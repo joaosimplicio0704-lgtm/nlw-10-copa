@@ -50,7 +50,10 @@ estavam no `localStorage`.
 
 ## Baixar pronto
 
-Na pasta [`download/`](./download/) ficam as versões prontas em **arquivo único**:
+> 👉 **Primeira vez? Siga o [`download/PASSO-A-PASSO.md`](./download/PASSO-A-PASSO.md).**
+> Passo a passo com o que clicar, o que deve aparecer e o que fazer se der erro.
+
+Na pasta [`download/`](./download/) ficam as versões prontas:
 
 | Arquivo | O que é |
 |---|---|
@@ -59,6 +62,8 @@ Na pasta [`download/`](./download/) ficam as versões prontas em **arquivo únic
 | `new-star-notebook-2.0.1.zip` | Os dois arquivos acima + instruções. |
 | `new-star-notebook-2.0.1-projeto.zip` | Projeto com os arquivos separados (rode `npm install` uma vez). |
 | `extrair-zip.js` | Extrator de ZIP que usa **só o Node.js** (sem WinRAR/7-Zip). |
+| `ABRIR-SITE.bat` / `.sh` | Abre o sistema com um clique: confere o Node, instala o que falta e sobe o servidor. |
+| `PASSO-A-PASSO.md` | Guia ilustrado, do download até o primeiro cadastro. |
 
 No GitHub, para baixar: abra a pasta `download/`, entre no arquivo e clique em **Download raw file**.
 Para o repositório inteiro: **Code → Download ZIP**.

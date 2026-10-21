@@ -228,7 +228,11 @@ async function semearDemonstracao() {
 
   db.salvarAgora();
 
-  console.log('  Demonstração: ana@teste.com / bruno@teste.com — senha 12345... (senha12345)');
+  console.log('');
+  console.log('  Contas de demonstração criadas:');
+  console.log('    ana@teste.com    senha12345   (com dados de exemplo)');
+  console.log('    bruno@teste.com  senha12345   (vazia)');
+  console.log('');
 }
 
 
@@ -2787,7 +2791,9 @@ async function iniciar() {
     console.log(`  Nuvem:    ${nuvem.provedor() || 'não configurada (backup local disponível)'}`);
 
     const contas = db.get('SELECT COUNT(*) AS total FROM usuarios');
-    if (!contas || contas.total === 0) {
+    const arquivoUnico = global.__NEWSTAR_ARQUIVO_UNICO__ === true;
+
+    if ((!contas || contas.total === 0) && !arquivoUnico) {
       console.log('\n  Nenhuma conta ainda: abra o site e clique em "Criar conta".');
       console.log('  (ou rode `npm run demo` para criar contas com dados de exemplo)');
     }
@@ -3365,6 +3371,10 @@ if (indiceExtrair !== -1) {
 
 /* ------------------------------ inicialização ---------------------------- */
 
+
+// Marca para o server.js saber que está rodando empacotado
+// (ele usa isso só para não repetir a dica de "criar conta").
+global.__NEWSTAR_ARQUIVO_UNICO__ = true;
 
 const config = carregar('config.js');
 config.pastaPublica = prepararInterface();

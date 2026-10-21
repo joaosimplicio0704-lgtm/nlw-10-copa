@@ -730,7 +730,9 @@ async function iniciar() {
     console.log(`  Nuvem:    ${nuvem.provedor() || 'não configurada (backup local disponível)'}`);
 
     const contas = db.get('SELECT COUNT(*) AS total FROM usuarios');
-    if (!contas || contas.total === 0) {
+    const arquivoUnico = global.__NEWSTAR_ARQUIVO_UNICO__ === true;
+
+    if ((!contas || contas.total === 0) && !arquivoUnico) {
       console.log('\n  Nenhuma conta ainda: abra o site e clique em "Criar conta".');
       console.log('  (ou rode `npm run demo` para criar contas com dados de exemplo)');
     }

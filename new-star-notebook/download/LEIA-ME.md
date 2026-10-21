@@ -1,6 +1,21 @@
 # 📥 Arquivos para baixar
 
-Aqui estão as versões prontas do **New Star Notebook 2.0.1** em arquivo único.
+> 👉 **Não sabe por onde começar? Abra o [`PASSO-A-PASSO.md`](./PASSO-A-PASSO.md).**
+> Ele tem o passo a passo com o que clicar, o que deve aparecer e o que fazer se der erro.
+
+Aqui estão as versões prontas do **New Star Notebook 2.0.1**.
+
+## Atalho: abrir com um clique (Windows)
+
+Baixe estes dois arquivos para a **mesma pasta**:
+
+- `ABRIR-SITE.bat`
+- `new-star-notebook-servidor.js`
+
+Depois dê **dois cliques em `ABRIR-SITE.bat`**. Ele confere o Node.js, instala o que falta
+e abre o navegador sozinho. No Mac/Linux, use `ABRIR-SITE.sh`.
+
+---
 
 ## 1. `new-star-notebook.html` — o mais simples
 

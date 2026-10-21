@@ -51,7 +51,9 @@ gerar('gerar-servidor-unico.js');
 
 const nomes = ['new-star-notebook.html', 'new-star-notebook-servidor.js'];
 
-if (fs.existsSync(path.join(saida, 'LEIA-ME.md'))) nomes.push('LEIA-ME.md');
+for (const extra of ['LEIA-ME.md', 'PASSO-A-PASSO.md', 'ABRIR-SITE.bat', 'ABRIR-SITE.sh', 'extrair-zip.js']) {
+  if (fs.existsSync(path.join(saida, extra))) nomes.push(extra);
+}
 
 fs.rmSync(path.join(saida, 'new-star-notebook-2.0.1.zip'), { force: true });
 compactar(nomes, 'new-star-notebook-2.0.1.zip');

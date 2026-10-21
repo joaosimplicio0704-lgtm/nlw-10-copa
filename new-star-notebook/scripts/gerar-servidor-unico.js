@@ -313,10 +313,18 @@ async function semearDemonstracao() {
 
   db.salvarAgora();
 
-  console.log('  Demonstração: ana@teste.com / bruno@teste.com — senha 12345... (senha12345)');
+  console.log('');
+  console.log('  Contas de demonstração criadas:');
+  console.log('    ana@teste.com    senha12345   (com dados de exemplo)');
+  console.log('    bruno@teste.com  senha12345   (vazia)');
+  console.log('');
 }
 
 /* ------------------------------ inicialização ---------------------------- */
+
+// Marca para o server.js saber que está rodando empacotado
+// (ele usa isso só para não repetir a dica de "criar conta").
+global.__NEWSTAR_ARQUIVO_UNICO__ = true;
 
 const config = carregar('config.js');
 config.pastaPublica = prepararInterface();
