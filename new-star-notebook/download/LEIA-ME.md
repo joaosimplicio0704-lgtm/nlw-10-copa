@@ -36,7 +36,43 @@ Abra `http://localhost:3000`. As contas de demonstração são criadas automatic
 
 Os dados ficam nas pastas `data/` e `backups/`, criadas ao lado do arquivo.
 
-## 3. Quer a pasta completa (com `node_modules`)?
+## 3. Extrair o `.zip` usando apenas o Node.js
+
+Não tem WinRAR ou 7-Zip? Dá para descompactar com o próprio Node:
+
+1. Baixe o `extrair-zip.js` desta pasta.
+2. Coloque na **mesma pasta** do `.zip`.
+3. Rode:
+
+```bash
+node extrair-zip.js                                  # extrai o único .zip da pasta
+node extrair-zip.js new-star-notebook-2.0.1.zip      # escolhe o arquivo
+node extrair-zip.js arquivo.zip minha-pasta          # escolhe o destino
+node extrair-zip.js --listar arquivo.zip             # só mostra o conteúdo
+```
+
+Funciona no Windows, macOS e Linux, sem instalar nada.
+
+## 4. Desempacotar o `.js` único de volta para o projeto
+
+O `new-star-notebook-servidor.js` tem o código-fonte inteiro dentro. Para voltar
+a ter os arquivos separados (`config.js`, `lib/`, `public/`, `server.js`...):
+
+```bash
+node new-star-notebook-servidor.js --extrair
+node new-star-notebook-servidor.js --extrair minha-pasta
+```
+
+Ele cria a pasta com todos os arquivos e um `package.json`. Depois:
+
+```bash
+cd new-star-notebook-extraido
+npm install
+npm start
+```
+
+## 5. Quer a pasta completa (com `node_modules`)?
+
 
 Baixe o `new-star-notebook-2.0.1-pronto.zip` que fica na raiz do projeto (fora desta pasta) ou use
 **Code → Download ZIP** no GitHub para o repositório inteiro.
@@ -60,5 +96,6 @@ Na pasta do projeto:
 ```bash
 npm run html-unico        # gera download/new-star-notebook.html
 npm run servidor-unico    # gera download/new-star-notebook-servidor.js
-npm run pacote            # gera os dois + o .zip desta pasta
+npm run pacote            # gera os dois arquivos, os .zip e este LEIA-ME
+npm run extrair           # extrai um .zip usando só o Node
 ```

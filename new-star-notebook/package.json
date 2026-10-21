@@ -15,7 +15,8 @@
     "demo": "node scripts/demo.js",
     "html-unico": "node scripts/gerar-arquivo-unico.js",
     "servidor-unico": "node scripts/gerar-servidor-unico.js",
-    "pacote": "node scripts/gerar-pacote.js"
+    "pacote": "node scripts/gerar-pacote.js",
+    "extrair": "node scripts/extrair-zip.js"
   },
   "dependencies": {
     "express": "^4.21.2",

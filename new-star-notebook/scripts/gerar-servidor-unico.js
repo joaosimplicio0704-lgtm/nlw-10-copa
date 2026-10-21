@@ -37,6 +37,8 @@ const MODULOS = [
   'lib/conta-backup.js',
   'lib/importacao.js',
   'server.js',
+  'scripts/backup.js',
+  'tests/smoke.js',
 ];
 
 const PUBLICOS = [
@@ -57,7 +59,9 @@ function blocoModulos() {
   const partes = [];
 
   for (const nome of MODULOS) {
-    const codigo = ler(nome);
+    // Shebang (#!) só vale no começo de um arquivo executável; dentro de uma
+    // função ele quebraria a sintaxe.
+    const codigo = ler(nome).replace(/^#!.*\n/, '');
     partes.push(
       `  ${JSON.stringify(nome)}: function (require, module, exports) {\n${codigo}\n  },`
     );
@@ -112,6 +116,13 @@ const CABECALHO = `#!/usr/bin/env node
  *    SUPABASE_* / WEBDAV_*     (backup em nuvem)
  *    Ou crie um arquivo .env ao lado deste.
  *
+ *  EXTRAIR O PROJETO DE VOLTA
+ *    node new-star-notebook-servidor.js --extrair
+ *    node new-star-notebook-servidor.js --extrair minha-pasta
+ *
+ *    Isso recria config.js, lib/, public/, server.js, scripts/ e tests/,
+ *    além de um package.json. Depois é só rodar npm install e npm start.
+ *
  *  Gerado automaticamente por scripts/gerar-servidor-unico.js
  *  A versão com vários arquivos (para manutenção) é a pasta do projeto.
  * ============================================================================
@@ -147,8 +158,6 @@ function conferirDependencias() {
   );
   process.exit(1);
 }
-
-conferirDependencias();
 
 /* ------------------------ carregador de módulos -------------------------- */
 
@@ -333,11 +342,15 @@ function montar() {
 
   if (fim === undefined) throw new Error('Marcador de inicialização não encontrado.');
 
+  const extracao = ler('scripts', 'arquivo-unico', 'extrair.js');
+
   const corpo = [
     inicio,
     blocoModulos(),
     '',
     blocoArquivos(),
+    '',
+    extracao,
     '',
     marcador,
     fim,

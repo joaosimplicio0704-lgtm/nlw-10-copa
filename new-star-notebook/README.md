@@ -58,11 +58,37 @@ Na pasta [`download/`](./download/) ficam as versões prontas em **arquivo únic
 | `new-star-notebook-servidor.js` | Sistema completo em um `.js`, com SQLite, backup `.sqlite` e nuvem. |
 | `new-star-notebook-2.0.1.zip` | Os dois arquivos acima + instruções. |
 | `new-star-notebook-2.0.1-projeto.zip` | Projeto com os arquivos separados (rode `npm install` uma vez). |
+| `extrair-zip.js` | Extrator de ZIP que usa **só o Node.js** (sem WinRAR/7-Zip). |
 
 No GitHub, para baixar: abra a pasta `download/`, entre no arquivo e clique em **Download raw file**.
 Para o repositório inteiro: **Code → Download ZIP**.
 
 Para regenerar tudo: `npm run pacote`.
+
+### Extrair sem WinRAR (só com Node.js)
+
+Baixe o `download/extrair-zip.js`, coloque na mesma pasta do `.zip` e rode:
+
+```bash
+node extrair-zip.js                              # extrai o único .zip da pasta
+node extrair-zip.js new-star-notebook-2.0.1.zip  # escolhe o arquivo
+node extrair-zip.js arquivo.zip minha-pasta      # escolhe o destino
+node extrair-zip.js --listar arquivo.zip         # só lista o conteúdo
+```
+
+Não precisa de nenhuma biblioteca: usa só `fs`, `path` e `zlib`, que já vêm no Node.
+
+### Desempacotar o `.js` único de volta
+
+O `new-star-notebook-servidor.js` guarda o projeto inteiro dentro dele:
+
+```bash
+node new-star-notebook-servidor.js --extrair
+node new-star-notebook-servidor.js --extrair minha-pasta
+```
+
+Recria `config.js`, `lib/`, `public/`, `server.js`, `scripts/`, `tests/` e um `package.json`.
+Depois é só `npm install` e `npm start`.
 
 ---
 
