@@ -727,7 +727,15 @@ async function iniciar() {
     console.log(`\n  New Star Notebook v${config.versao}`);
     console.log(`  Servidor: http://localhost:${config.porta}`);
     console.log(`  Banco:    ${config.arquivoBanco}`);
-    console.log(`  Nuvem:    ${nuvem.provedor() || 'não configurada (backup local disponível)'}\n`);
+    console.log(`  Nuvem:    ${nuvem.provedor() || 'não configurada (backup local disponível)'}`);
+
+    const contas = db.get('SELECT COUNT(*) AS total FROM usuarios');
+    if (!contas || contas.total === 0) {
+      console.log('\n  Nenhuma conta ainda: abra o site e clique em "Criar conta".');
+      console.log('  (ou rode `npm run demo` para criar contas com dados de exemplo)');
+    }
+
+    console.log('');
   });
 
   const encerrar = (sinal) => {

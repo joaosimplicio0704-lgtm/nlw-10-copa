@@ -59,6 +59,7 @@ npm start
 Abra **http://localhost:3000**.
 
 - Na primeira vez, clique em **Criar conta**.
+- Para abrir já com dados de exemplo: `npm run demo` (cria as contas abaixo).
 - Cada conta tem um banco de dados próprio: os dados de um login não aparecem no outro.
 - Para desenvolvimento com reinício automático: `npm run dev`.
 - Para encerrar: `Ctrl + C` (o banco é gravado no disco antes de sair).
@@ -73,6 +74,20 @@ O arquivo do banco fica em `data/newstar.sqlite` e **não é versionado** (veja 
 | `npm run dev` | Sobe com `node --watch` (reinicia ao salvar) |
 | `npm test` | Roda o teste rápido da API (isolamento, backup, importação) |
 | `npm run backup` | Cria um backup do banco completo em `backups/` |
+| `npm run demo` | Cria contas de demonstração com dados de exemplo (só em banco vazio) |
+
+---
+
+### Contas de demonstração
+
+O comando `npm run demo` cria duas contas (apenas se o banco ainda não tiver nenhuma):
+
+| E-mail | Senha | Conteúdo |
+|---|---|---|
+| `ana@teste.com` | `senha12345` | serviços, contatos, financeiro, peças, estoque e uma OS |
+| `bruno@teste.com` | `senha12345` | conta vazia, útil para ver o isolamento |
+
+Para recomeçar do zero, apague a pasta `data/` e rode `npm start` (banco vazio) ou `npm run demo`.
 
 ---
 

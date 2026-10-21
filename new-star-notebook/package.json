@@ -11,7 +11,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "backup": "node scripts/backup.js",
-    "test": "node tests/smoke.js"
+    "test": "node tests/smoke.js",
+    "demo": "node scripts/demo.js"
   },
   "dependencies": {
     "express": "^4.21.2",
