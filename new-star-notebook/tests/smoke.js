@@ -313,6 +313,75 @@ async function principal() {
     assert.strictEqual(dados.dados.financeiro[0].valor_centavos, 123456);
   });
 
+  await testar('login pelo caminho antigo (/api/login) continua funcionando', async () => {
+    const resposta = await api('POST', '/api/login', {
+      email: 'ana@teste.local',
+      senha: 'senha12345',
+    });
+
+    assert.strictEqual(resposta.status, 200);
+    assert.ok(resposta.dados.token);
+  });
+
+  await testar('autenticação pelo header X-Sessao', async () => {
+    const resposta = await fetch(`${BASE}/api/dados`, {
+      headers: { 'X-Sessao': tokenA },
+    });
+
+    assert.strictEqual(resposta.status, 200);
+  });
+
+  await testar('autenticação pelo cookie de sessão (sem header)', async () => {
+    const entrada = await api('POST', '/api/auth/entrar', {
+      email: 'ana@teste.local',
+      senha: 'senha12345',
+    });
+
+    const cookies = entrada.headers.getSetCookie ? entrada.headers.getSetCookie() : [];
+    const sessao = cookies.find((c) => c.startsWith('newstar_sessao='));
+    assert.ok(sessao, 'o login deve definir o cookie newstar_sessao');
+    assert.ok(/HttpOnly/i.test(sessao), 'o cookie deve ser HttpOnly');
+    assert.ok(/SameSite=/i.test(sessao), 'o cookie deve ter SameSite');
+
+    const resposta = await fetch(`${BASE}/api/dados`, {
+      headers: { Cookie: sessao.split(';')[0] },
+    });
+
+    assert.strictEqual(resposta.status, 200);
+    const dados = await resposta.json();
+    assert.ok(Array.isArray(dados.servicos));
+  });
+
+  await testar('escrita com cookie e outra origem é bloqueada (CSRF)', async () => {
+    const entrada = await api('POST', '/api/auth/entrar', {
+      email: 'ana@teste.local',
+      senha: 'senha12345',
+    });
+
+    const cookies = entrada.headers.getSetCookie ? entrada.headers.getSetCookie() : [];
+    const sessao = cookies.find((c) => c.startsWith('newstar_sessao='));
+    assert.ok(sessao);
+
+    const resposta = await fetch(`${BASE}/api/servicos`, {
+      method: 'POST',
+      headers: {
+        Cookie: sessao.split(';')[0],
+        Origin: 'https://site-malicioso.example',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ nome: 'Invasão', num: '999', status: 'Em andamento' }),
+    });
+
+    assert.strictEqual(resposta.status, 403);
+  });
+
+  await testar('respostas da API não são guardadas em cache', async () => {
+    const resposta = await api('GET', '/api/dados', undefined, tokenA);
+    assert.strictEqual(resposta.status, 200);
+    assert.strictEqual(resposta.headers.get('cache-control'), 'no-store');
+    assert.ok(String(resposta.headers.get('vary')).includes('Authorization'));
+  });
+
   await testar('sair invalida o token', async () => {
     const saida = await api('POST', '/api/auth/sair', {}, tokenB);
     assert.strictEqual(saida.status, 200);

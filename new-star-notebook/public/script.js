@@ -182,11 +182,13 @@ const estado = {
   osEmEdicaoId: null,
 };
 
-async function api(metodo, caminho, corpo, { semAutenticacao = false } = {}) {
-  const opcoes = { method: metodo, headers: {} };
+async function api(metodo, caminho, corpo, { semAutenticacao = false, tentativa = 0 } = {}) {
+  const opcoes = { method: metodo, headers: {}, credentials: 'same-origin' };
 
   if (!semAutenticacao && estado.token) {
+    // O servidor aceita qualquer um dos dois (e também o cookie de sessão).
     opcoes.headers.Authorization = `Bearer ${estado.token}`;
+    opcoes.headers['X-Sessao'] = estado.token;
   }
 
   if (corpo !== undefined) {
@@ -210,11 +212,21 @@ async function api(metodo, caminho, corpo, { semAutenticacao = false } = {}) {
     dados = null;
   }
 
-  if (resposta.status === 401 && !semAutenticacao && estado.token) {
-    encerrarSessaoLocal();
-    const erro = new Error('Sua sessão expirou. Entre novamente.');
-    erro.status = 401;
-    throw erro;
+  if (resposta.status === 401 && !semAutenticacao) {
+    // Outra aba pode ter renovado a sessão: tenta o token mais recente uma vez.
+    const tokenSalvo = localStorage.getItem('newstar_token');
+    if (tokenSalvo && tokenSalvo !== estado.token && tentativa < 1) {
+      estado.token = tokenSalvo;
+      return api(metodo, caminho, corpo, { semAutenticacao, tentativa: tentativa + 1 });
+    }
+
+    if (estado.token) {
+      encerrarSessaoLocal('Sua sessão expirou. Entre novamente.');
+      const erro = new Error('Sua sessão expirou. Entre novamente.');
+      erro.status = 401;
+      erro.silencioso = true;
+      throw erro;
+    }
   }
 
   if (!resposta.ok) {
@@ -232,13 +244,34 @@ function salvarSessao(resposta) {
   estado.token = resposta.token;
   estado.usuario = resposta.usuario;
   localStorage.setItem('newstar_token', resposta.token);
+
+  if (resposta.usuario && resposta.usuario.email) {
+    localStorage.setItem('newstar_email', resposta.usuario.email);
+  }
 }
 
-function encerrarSessaoLocal() {
+function emailLembrado() {
+  return (
+    (estado.usuario && estado.usuario.email) ||
+    localStorage.getItem('newstar_email') ||
+    ''
+  );
+}
+
+function encerrarSessaoLocal(aviso = '') {
+  const email = emailLembrado();
+
   estado.token = null;
   estado.usuario = null;
   localStorage.removeItem('newstar_token');
+
+  const campoSenha = $('login-senha');
+  if (campoSenha) campoSenha.value = '';
+
   mostrarLogin();
+
+  if (email && !val('login-email')) $('login-email').value = email;
+  if (aviso) mostrarErroAuth(aviso);
 }
 
 function mostrarLogin() {
@@ -257,20 +290,27 @@ function mostrarApp() {
 async function iniciar() {
   prepararDatas();
 
-  if (!estado.token) {
-    mostrarLogin();
-    return;
-  }
+  const email = localStorage.getItem('newstar_email');
+  if (email && !val('login-email')) $('login-email').value = email;
 
+  // Mesmo sem token no localStorage, tenta carregar: o cookie HttpOnly pode
+  // manter a sessão (útil quando o armazenamento do navegador é limpo).
   try {
     await carregarDados();
     aplicarInterface();
     mostrarApp();
   } catch (erro) {
-    if (erro.status !== 401) {
+    estado.token = null;
+    estado.usuario = null;
+    localStorage.removeItem('newstar_token');
+    mostrarLogin();
+
+    if (erro.status === 401) {
+      // Sessão antiga: volta para o login sem assustar o usuário.
+      if (email && !val('login-email')) $('login-email').value = email;
+    } else {
       toast(erro.message, 'erro');
     }
-    mostrarLogin();
   }
 }
 
@@ -856,6 +896,8 @@ function mostrarAba(nome, { atualizarHash = true } = {}) {
 /* ========================== 5. FORMULÁRIOS ========================== */
 
 function mensagemErro(erro) {
+  // 401 já levou o usuário para a tela de login com a mensagem no lugar certo.
+  if (erro && (erro.status === 401 || erro.silencioso)) return;
   toast(erro.message || 'Não foi possível salvar.', 'erro');
 }
 
@@ -1524,13 +1566,21 @@ function imprimirRelatorioEstoque() {
 /* ===================== 9. BACKUP / NUVEM / IMPORTAÇÃO ===================== */
 
 async function baixarArquivo(caminho, nomePadrao) {
-  const resposta = await fetch(caminho, {
-    headers: estado.token ? { Authorization: `Bearer ${estado.token}` } : {},
-  });
+  const cabecalhos = {};
+  if (estado.token) {
+    cabecalhos.Authorization = `Bearer ${estado.token}`;
+    cabecalhos['X-Sessao'] = estado.token;
+  }
+
+  const resposta = await fetch(caminho, { headers: cabecalhos, credentials: 'same-origin' });
 
   if (resposta.status === 401) {
-    encerrarSessaoLocal();
-    throw new Error('Sua sessão expirou. Entre novamente.');
+    const aviso = 'Sua sessão expirou. Entre novamente.';
+    encerrarSessaoLocal(aviso);
+    const erro = new Error(aviso);
+    erro.status = 401;
+    erro.silencioso = true;
+    throw erro;
   }
 
   if (!resposta.ok) {

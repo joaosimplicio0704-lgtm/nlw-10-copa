@@ -66,6 +66,32 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    // Impede que navegador/proxy guarde respostas da API (inclusive um 401 antigo)
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Vary', 'Authorization, Cookie');
+  }
+
+  res.on('finish', () => {
+    // Só registra 401 quando alguma credencial foi enviada: assim dá para
+    // diferenciar "visita nova" de "token recusado".
+    if (res.statusCode === 401) {
+      const temHeader = Boolean(req.headers.authorization || req.headers['x-sessao']);
+      const temCookie = /newstar_sessao=/.test(String(req.headers.cookie || ''));
+
+      if (temHeader || temCookie) {
+        console.log(
+          `[401] ${req.method} ${req.originalUrl} · header=${temHeader} cookie=${temCookie} ` +
+            `host=${req.headers.host || '-'} origem=${req.headers.origin || '-'}`
+        );
+      }
+    }
+  });
+
+  next();
+});
+
 app.use(express.json({ limit: '30mb' }));
 
 // Limite simples de tentativas de login/cadastro por IP (em memória)
@@ -137,93 +163,97 @@ app.get('/health', (req, res) => {
 // Autenticação
 // ---------------------------------------------------------------------------
 
-app.post(
-  '/api/auth/registrar',
-  limitarAutenticacao,
-  rota(async (req, res) => {
-    const nome = validarNome(req.body?.nome, 'Nome');
-    const empresa = String(req.body?.empresa || '').trim().slice(0, 120);
-    const email = validarEmail(req.body?.email);
-    const senha = validarSenha(req.body?.senha);
+// Handler único, registrado em dois caminhos por compatibilidade com
+// navegadores que ainda tenham o script antigo em cache.
+const registrarConta = rota(async (req, res) => {
+  const nome = validarNome(req.body?.nome, 'Nome');
+  const empresa = String(req.body?.empresa || '').trim().slice(0, 120);
+  const email = validarEmail(req.body?.email);
+  const senha = validarSenha(req.body?.senha);
 
-    const existe = db.get('SELECT id FROM usuarios WHERE email = ?', [email]);
-    if (existe) {
-      throw new ErroValidacao('Já existe uma conta com esse e-mail. Faça login.', 409);
-    }
+  const existe = db.get('SELECT id FROM usuarios WHERE email = ?', [email]);
+  if (existe) {
+    throw new ErroValidacao('Já existe uma conta com esse e-mail. Faça login.', 409);
+  }
 
-    const hash = await auth.hashSenha(senha);
+  const hash = await auth.hashSenha(senha);
 
-    const id = db.transacao(() => {
-      const resultado = db.run(
-        'INSERT INTO usuarios (nome, empresa, email, senha_hash) VALUES (?, ?, ?, ?)',
-        [nome, empresa, email, hash]
-      );
-
-      auditoria.registrar({
-        tenantId: resultado.id,
-        usuarioId: resultado.id,
-        entidade: 'conta',
-        acao: 'conta',
-        descricao: `Criou a conta (${email}).`,
-      });
-
-      return resultado.id;
-    });
-
-    const sessao = auth.criarSessao(id);
-    db.salvarAgora();
-
-    const usuario = db.get(
-      'SELECT id, nome, empresa, email, papel, criado_em FROM usuarios WHERE id = ?',
-      [id]
+  const id = db.transacao(() => {
+    const resultado = db.run(
+      'INSERT INTO usuarios (nome, empresa, email, senha_hash) VALUES (?, ?, ?, ?)',
+      [nome, empresa, email, hash]
     );
 
-    res.status(201).json({
-      token: sessao.token,
-      expiraEm: sessao.expiraEm,
-      usuario: usuarioPublico(usuario),
-    });
-  })
-);
-
-app.post(
-  '/api/auth/entrar',
-  limitarAutenticacao,
-  rota(async (req, res) => {
-    const email = validarEmail(req.body?.email);
-    const senha = String(req.body?.senha || '');
-
-    const usuario = db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
-
-    // Mesmo sem usuário, executa o scrypt para não revelar quais e-mails existem
-    const senhaOk = usuario
-      ? await auth.verificarSenha(senha, usuario.senha_hash)
-      : await auth.verificarSenha(senha, HASH_FALSO);
-
-    if (!usuario || !senhaOk) {
-      throw new ErroValidacao('E-mail ou senha incorretos.', 401);
-    }
-
-    auth.limparSessoesVencidas();
-    const sessao = auth.criarSessao(usuario.id);
-
     auditoria.registrar({
-      tenantId: usuario.id,
-      usuarioId: usuario.id,
+      tenantId: resultado.id,
+      usuarioId: resultado.id,
       entidade: 'conta',
       acao: 'conta',
-      descricao: 'Entrou no sistema.',
+      descricao: `Criou a conta (${email}).`,
     });
 
-    db.salvarAgora();
+    return resultado.id;
+  });
 
-    res.json({
-      token: sessao.token,
-      expiraEm: sessao.expiraEm,
-      usuario: usuarioPublico(usuario),
-    });
-  })
-);
+  const sessao = auth.criarSessao(id);
+  db.salvarAgora();
+
+  const usuario = db.get(
+    'SELECT id, nome, empresa, email, papel, criado_em FROM usuarios WHERE id = ?',
+    [id]
+  );
+
+  auth.definirCookieSessao(req, res, sessao.token);
+
+  res.status(201).json({
+    token: sessao.token,
+    expiraEm: sessao.expiraEm,
+    usuario: usuarioPublico(usuario),
+  });
+});
+
+app.post('/api/auth/registrar', limitarAutenticacao, registrarConta);
+app.post('/api/registrar', limitarAutenticacao, registrarConta);
+
+const entrarNaConta = rota(async (req, res) => {
+  const email = validarEmail(req.body?.email);
+  const senha = String(req.body?.senha || '');
+
+  const usuario = db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
+
+  // Mesmo sem usuário, executa o scrypt para não revelar quais e-mails existem
+  const senhaOk = usuario
+    ? await auth.verificarSenha(senha, usuario.senha_hash)
+    : await auth.verificarSenha(senha, HASH_FALSO);
+
+  if (!usuario || !senhaOk) {
+    throw new ErroValidacao('E-mail ou senha incorretos.', 401);
+  }
+
+  auth.limparSessoesVencidas();
+  const sessao = auth.criarSessao(usuario.id);
+
+  auditoria.registrar({
+    tenantId: usuario.id,
+    usuarioId: usuario.id,
+    entidade: 'conta',
+    acao: 'conta',
+    descricao: 'Entrou no sistema.',
+  });
+
+  db.salvarAgora();
+
+  auth.definirCookieSessao(req, res, sessao.token);
+
+  res.json({
+    token: sessao.token,
+    expiraEm: sessao.expiraEm,
+    usuario: usuarioPublico(usuario),
+  });
+});
+
+app.post('/api/auth/entrar', limitarAutenticacao, entrarNaConta);
+app.post('/api/login', limitarAutenticacao, entrarNaConta);
 
 // A partir daqui, tudo em /api exige sessão válida
 app.use('/api', auth.exigirLogin);
@@ -234,6 +264,7 @@ app.get('/api/auth/eu', (req, res) => {
 
 app.post('/api/auth/sair', (req, res) => {
   auth.destruirSessao(req.token);
+  auth.limparCookieSessao(req, res);
   db.salvarAgora();
   res.json({ ok: true });
 });
@@ -651,7 +682,7 @@ app.use(
     index: 'index.html',
     etag: true,
     setHeaders(res, caminho) {
-      if (caminho.endsWith('index.html')) {
+      if (/\.(html|js|css)$/i.test(caminho)) {
         res.setHeader('Cache-Control', 'no-cache');
       }
     },

@@ -1,6 +1,6 @@
 {
   "name": "new-star-notebook",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "Sistema de ordens de serviço, estoque e financeiro da New Star Notebook",
   "main": "server.js",

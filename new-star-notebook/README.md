@@ -285,14 +285,17 @@ Se o acesso for só na rede da loja, ainda assim use senha forte e mantenha o se
 
 ## API
 
-Todas as rotas `/api/*` (exceto login/cadastro) exigem `Authorization: Bearer <token>`.
+Todas as rotas `/api/*` (exceto login/cadastro) exigem sessão válida. O token pode ir em
+`Authorization: Bearer <token>`, no header `X-Sessao: <token>` **ou** no cookie
+`newstar_sessao` (HttpOnly), que o login define sozinho. Os caminhos antigos
+`/api/login` e `/api/registrar` continuam aceitos como alias.
 
 | Método | Rota | Uso |
 |---|---|---|
-| POST | `/api/auth/registrar` | Criar conta |
-| POST | `/api/auth/entrar` | Login (devolve token) |
+| POST | `/api/auth/registrar` (ou `/api/registrar`) | Criar conta |
+| POST | `/api/auth/entrar` (ou `/api/login`) | Login (devolve token e define cookie) |
 | GET | `/api/auth/eu` | Usuário da sessão |
-| POST | `/api/auth/sair` | Encerrar sessão |
+| POST | `/api/auth/sair` | Encerrar sessão (apaga o cookie) |
 | GET | `/api/dados` | Todos os dados da conta (uma chamada) |
 | POST | `/api/servicos` | Criar serviço |
 | PUT | `/api/servicos/:id` | Atualizar serviço |
@@ -409,6 +412,13 @@ Se estiver bloqueado por extensão do navegador, use "Imprimir" e escolha "Salva
 **A nuvem não aparece como configurada**
 Confira o `.env`, reinicie o servidor e abra `GET /api/backup/nuvem` com o token.
 Erros de bucket/permissão aparecem na resposta do botão "Enviar backup para a nuvem".
+
+**Apareceu "Sua sessão expirou. Entre novamente."**
+Isso acontece quando o token salvo no navegador não vale mais (sessão vencida, logout em outra aba
+ou banco restaurado). O sistema já limpa o token, volta para o login e guarda o e-mail; basta digitar
+a senha. Se a página estiver aberta desde antes de uma atualização, recarregue com **Ctrl+F5**.
+Em preview/iframe o login usa também um cookie `HttpOnly`, então funciona mesmo se o proxy
+remover o header `Authorization`.
 
 **Esqueci a senha**
 Hoje não há recuperação automática. Com acesso ao servidor, é possível redefinir via API/console

@@ -54,7 +54,7 @@ module.exports = {
   porta: Number(process.env.PORT) || 3000,
   host: process.env.HOST || '0.0.0.0',
   ambiente: process.env.NODE_ENV || 'development',
-  versao: '2.0.0',
+  versao: '2.0.1',
 
   // Sessão: token opaco enviado no header Authorization.
   nomeTokenLocal: 'newstar_token',
