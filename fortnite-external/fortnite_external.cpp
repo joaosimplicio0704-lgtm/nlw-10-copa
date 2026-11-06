@@ -440,6 +440,7 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT drv, PUNICODE_STRING)
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "psapi.lib")
+#pragma comment(lib, "advapi32.lib")   // tokens: OpenProcessToken/DuplicateTokenEx/PrivilegeCheck
 
 // ---------------------------------------------------------------------------
 //  CONFIG — one place to tune. Menu overrides the mutable copies at runtime.
