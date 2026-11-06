@@ -1799,7 +1799,15 @@ inline bool pawn_aim_point(uintptr_t pawn, uintptr_t root, const Vector3& centre
     {
         const double half = have_capsule ? static_cast<double>(capsule_half)
                                          : static_cast<double>(cfg::kCapsuleHalfHeightFallback);
-        out = Vector3(centre.x, centre.y, centre.z + (static_cast<double>(eye_height) - half));
+
+        // BaseEyeHeight is measured from the actor origin, the capsule spans
+        // +/- half, so the delta is (eye - half). Clamped into the capsule: a
+        // misread or patched BaseEyeHeight must not aim above the player.
+        double delta = static_cast<double>(eye_height) - half;
+        if (delta > half)  delta = half;
+        if (delta < -half) delta = -half;
+
+        out = Vector3(centre.x, centre.y, centre.z + delta);
         return valid_vector(out);
     }
 
@@ -1981,8 +1989,11 @@ inline void game_tick()
                     const float bx = static_cast<float>(top2d.x) - box_width * 0.5f;
                     const float by = static_cast<float>(top2d.y);
 
-                    const DWORD box_color = visible ? D3DCOLOR_ARGB(255, 245, 245, 245)
-                                                    : D3DCOLOR_ARGB(255, 240, 60, 60);
+                    // red/white only when the bRecentlyRendered bit is trusted;
+                    // otherwise a neutral colour that claims nothing
+                    const DWORD box_color = !cfg::kVisibleOnly ? D3DCOLOR_ARGB(255, 245, 245, 245)
+                                          : visible           ? D3DCOLOR_ARGB(255, 245, 245, 245)
+                                                              : D3DCOLOR_ARGB(255, 240, 60, 60);
 
                     if (settings::visuals::box)
                         draw::cornered_box(bx, by, box_width, box_height, box_color, 1.f);
@@ -2163,7 +2174,7 @@ inline void render_menu()
         ui::checkbox(x, y, "health bar + hp", &settings::visuals::health_bar); y += 24.f;
 
         draw::text(x, y + 6.f, ui::kColTextDim,
-                   settings::visuals::enable ? "green = capsule box from validated positions" : "");
+                   settings::visuals::enable ? "box from validated capsule positions" : "");
     }
     else
     {
