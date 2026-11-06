@@ -3,3 +3,6 @@ fortnite-external/*.obj
 fortnite-external/*.exe
 fortnite-external/*.pdb
 fortnite-external/fortnite_external.cfg.json
+
+# cross compiler for the compile gate (never commit a 400 MB toolchain)
+tools/zig/

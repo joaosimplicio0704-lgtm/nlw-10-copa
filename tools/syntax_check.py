@@ -36,6 +36,11 @@ def find_compiler():
         found = shutil.which(cc)
         if found:
             return [found]
+    # A throwaway zig dropped in here still counts (it is ~200 MB, so it is not
+    # vendored; put it in tools/zig/ and the gate uses it).
+    local = os.path.join(ROOT, "tools", "zig", "zig")
+    if os.path.exists(local):
+        return [local, "c++", "-target", "x86_64-windows-gnu"]
     return None
 
 
