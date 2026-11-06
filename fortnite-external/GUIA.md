@@ -24,23 +24,69 @@ tarefas, PID 25184).
 
 ---
 
-## 1. Compilar (user mode)
+## 1. Compilar no Visual Studio (passo a passo)
 
-Instale o **Visual Studio 2022** com a carga "Desenvolvimento para desktop com C++".
-Abra o **x64 Native Tools Command Prompt for VS 2022** (`Menu Iniciar → Visual Studio 2022 → x64 Native Tools`),
-vá até a pasta e rode:
+Você tem duas opções. A **A** é a mais simples e usa o `.sln` que já está aqui.
+
+### Opção A — abrir o `fortnite_external.sln` (recomendado)
+
+1. Instale o **Visual Studio 2022** marcando a carga *Desenvolvimento para desktop com C++*.
+   Se já instalou e não marcou, abra o **Visual Studio Installer** → *Modificar* → marque essa carga.
+2. Copie a pasta `fortnite-external` inteira pro seu PC, por exemplo em `C:\tools\fn`.
+   Dentro dela tem que estar:
+   ```
+   C:\tools\fn\fortnite_external_single.cpp
+   C:\tools\fn\fortnite_external.vcxproj
+   C:\tools\fn\fortnite_external.sln
+   ```
+3. Dê **duplo clique** em `fortnite_external.sln`. O Visual Studio abre.
+4. Na barra do topo, troque as caixinhas de **Debug** para **Release** e de **x86/x64** para **x64**.
+   (se aparecer "Any CPU", não serve — tem que ser **x64**.)
+5. Menu **Compilar → Compilar Solução** (ou `Ctrl+Shift+B`).
+6. Embaixo, na aba *Saída*, tem que terminar com:
+   ```
+   ========== Compilar: 1 com êxito, 0 com falha ==========
+   ```
+   O `.exe` sai em `C:\tools\fn\bin\x64\Release\fortnite_external.exe`.
+
+### Opção B — criar o projeto na mão
+
+Se não quiser usar o `.sln`, dá pra criar do zero (útil se for mexer muito no código):
+
+1. Visual Studio → **Criar novo projeto** → **Aplicativo de Console** (C++) → *Avançar*.
+2. Nome: `fortnite_external`. Marque **Colocar solução e projeto no mesmo diretório**.
+3. Quando aparecer o `fortnite_external.cpp` gerado, **apague** ele (clique direito → *Remover* → *Excluir*).
+4. Clique direito em **Arquivos de Origem** → *Adicionar* → *Item Existente…* → escolha
+   `fortnite_external_single.cpp`.
+5. Clique direito no **nome do projeto** (negrito no Solution Explorer) → *Propriedades*.
+   Confira/corrija:
+   - **Configuração:** `Todos as Configurações`
+   - *Propriedades de Configuração → Avançado → Padrão da Linguagem C++*: **ISO C++17 (/std:c++17)**
+   - *Propriedades de Configuração → Vinculador → Sistema → Subsistema*: **Console (/SUBSYSTEM:CONSOLE)**
+   - *Propriedades de Configuração → Vinculador → Manifest Tool → Nível de Execução de UAC*: **requireAdministrator**
+     (isso faz o `.exe` já pedir admin sozinho — é o que permite o `OpenProcess`)
+   - *Propriedades de Configuração → C/C++ → Pré-processador → Definições de Pré-processador*:
+     adicione `_CRT_SECURE_NO_WARNINGS`
+6. **Compilar → Compilar Solução** (`Ctrl+Shift+B`).
+7. Ache o `.exe`: clique direito no projeto → *Abrir Pasta em Explorador de Arquivos* →
+   vá em `x64\Release\` (ou `Debug\`).
+
+> Se der erro `C1010: fim de arquivo inesperado ao procurar cabeçalho pré-compilado`,
+> é porque o projeto novo vem com `pch.h` ligado: em *Propriedades → C/C++ → Cabeçalhos Pré-compilados*,
+> mude de **Usar** para **Não Usar Cabeçalhos Pré-compilados**.
+
+### Opção C — linha de comando (sem IDE)
+
+Menu Iniciar → **x64 Native Tools Command Prompt for VS 2022** (tem que ser esse, não o `cmd`):
 
 ```
 cd C:\tools\fn
 cl /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS fortnite_external_single.cpp /link /SUBSYSTEM:CONSOLE /OUT:fortnite_external.exe
 ```
 
-Sai `fortnite_external.exe` ao lado do `.cpp`. Se o `cl` não for reconhecido, você
-abriu o prompt errado (tem que ser o "Native Tools", não o `cmd` comum).
-
 ---
 
-## 2. Primeira execução — sem driver
+## 2. Como executar (Windows)
 
 Antes de mexer com driver, teste o caminho simples. Abra o `.cpp` no editor e
 troque **uma linha** no bloco `namespace cfg` (fica no topo):
@@ -68,7 +114,9 @@ Ordem de execução:
 `UWorld resolved by scan` = ele achou o ponteiro sozinho, você **não precisa** do
 número que faltava no dump. Se aparecer `UWorld not found`, veja a seção 5.
 
-4. o overlay aparece; aperte **INSERT** pra abrir o menu
+5. o overlay aparece; **clique uma vez dentro do jogo** (pra ele ter o foco) e aperte
+   **INSERT** pra abrir o menu. Com o menu aberto o mouse volta a funcionar na tela;
+   fechando, ele volta a ser click-through.
 
 ---
 

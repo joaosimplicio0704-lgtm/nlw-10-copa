@@ -11,7 +11,8 @@ hand-edited.
 | file | what |
 |---|---|
 | **`fortnite_external_single.cpp`** | **everything in one file** — driver + cheat + offsets, no local includes. This is the one to compile |
-| `GUIA.md` | passo a passo em português: compilar, rodar sem driver, teclas, erros comuns |
+| `GUIA.md` | passo a passo em português: compilar no Visual Studio, rodar, teclas, erros comuns |
+| `fortnite_external.sln` / `.vcxproj` | solution pronta (VS 2022, x64, C++17, console, UAC admin) |
 | `fortnite_external.cpp` | same program, offsets in `offsets_gen.hpp` (easier to diff) |
 | `offsets_gen.hpp` | generated offset table (`off::` flat + `sch::` full dump) |
 | `../tools/gen_offsets.py` | offset generator; reads the dump JSON |
