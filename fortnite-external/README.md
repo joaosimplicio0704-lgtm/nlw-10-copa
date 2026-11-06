@@ -11,6 +11,7 @@ hand-edited.
 | file | what |
 |---|---|
 | **`fortnite_external_single.cpp`** | **everything in one file** — driver + cheat + offsets, no local includes. This is the one to compile |
+| `GUIA.md` | passo a passo em português: compilar, rodar sem driver, teclas, erros comuns |
 | `fortnite_external.cpp` | same program, offsets in `offsets_gen.hpp` (easier to diff) |
 | `offsets_gen.hpp` | generated offset table (`off::` flat + `sch::` full dump) |
 | `../tools/gen_offsets.py` | offset generator; reads the dump JSON |
@@ -40,6 +41,22 @@ Behaviour fixes that came out of reading the original:
   in this build. Replaced by `SkinnedMeshComponent::bRecentlyRendered` (0x7E1).
 - the original recomputed the camera inside every W2S call (3 matrix reads per
   bone); the camera is now read once per tick.
+
+## UWorld: resolved at runtime
+
+The one value the dump does not carry is now found at startup instead of being
+a hardcoded FILL. `resolve_uworld()` tries, in order:
+
+1. `off::UWorld` from the generated header,
+2. `cfg::kUWorldFallback` if you set it,
+3. a scan of `base+0x8000000 .. base+0x20000000` for a qword that passes
+   `looks_like_uworld()`: `UWorld+OwningGameInstance` valid **and**
+   `GameInstance+LocalPlayers` valid **and** `UWorld+GameState` valid **and**
+   `GameState+PlayerArray` valid. Four independent hops — random data does not
+   survive that.
+
+After a map change or respawn the pointer is re-validated each tick and re-resolved
+if it went bad, so nothing needs restarting.
 
 ## The walk (v43.00)
 

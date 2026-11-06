@@ -496,10 +496,13 @@ namespace cfg
     constexpr bool  kTryUiAccessBand   = true;       // requires a signed binary in a trusted path
     constexpr int   kFontPx            = 14;
 
-    // GWorld offset, second chance if offsets_gen.hpp still has off::UWorld = 0.
-    // Get it from a fresh dump: globals.UWorld in an OffsetDeck export, or from
-    // a Fortnite SDK dump's "GWorld" entry.
-    constexpr uintptr_t kUWorldFallback = 0x0;   // FILL: GWorld offset for this patch
+    // GWorld. Three chances, in order: the generated header, a manual value, then
+    // a runtime scan of the image's writable data for a self-consistent UWorld.
+    constexpr uintptr_t kUWorldFallback = 0x0;   // optional, if you have the number
+    constexpr bool      kAutoResolveUWorld = true;
+    // scan window: GWorld lives in the module's .data, well past the code
+    constexpr uintptr_t kScanStart = 0x8000000;
+    constexpr uintptr_t kScanEnd   = 0x20000000;
 }
 
 // ---------------------------------------------------------------------------
@@ -7945,13 +7948,68 @@ namespace cache
 
 // The one number the dump does not ship: GWorld (the UWorld**) base offset in
 // FortniteClient-Win64-Shipping.exe. It changes every patch.
+// Cheap validity gate used while scanning: every hop must land in user space and
+// be 8-byte aligned, which kills the vast majority of false positives.
+inline bool plausible_ptr(uintptr_t p)
+{
+    return p > 0x10000 && p < 0x7FFFFFFFFFFFULL && (p % sizeof(void*)) == 0;
+}
+
+// Is `candidate` a UWorld? Walk the two pointers the cheat actually needs and
+// check they resolve: OwningGameInstance -> LocalPlayers (a TArray's data ptr),
+// and GameState. Two independent hops landing as pointers is a very strong
+// signature; a random qword in .data almost never passes both.
+inline bool looks_like_uworld(uintptr_t candidate)
+{
+    if (!plausible_ptr(candidate)) return false;
+
+    const uintptr_t game_instance = mem.read<uintptr_t>(candidate + off::GameInstance);
+    if (!plausible_ptr(game_instance)) return false;
+
+    const uintptr_t local_players = mem.read<uintptr_t>(game_instance + off::LocalPlayers);
+    if (!plausible_ptr(local_players)) return false;
+
+    const uintptr_t game_state = mem.read<uintptr_t>(candidate + off::GameState);
+    if (!plausible_ptr(game_state)) return false;
+
+    // GameStateBase::PlayerArray is a TArray; its Data ptr must be valid too
+    const uintptr_t player_array = mem.read<uintptr_t>(game_state + off::PlayerArray);
+    if (!plausible_ptr(player_array)) return false;
+
+    return true;
+}
+
+inline uintptr_t scan_for_uworld()
+{
+    for (uintptr_t at = cfg::kScanStart; at < cfg::kScanEnd; at += sizeof(uintptr_t))
+    {
+        const uintptr_t world = mem.read<uintptr_t>(mem.base + at);
+        if (!plausible_ptr(world)) continue;
+
+        if (looks_like_uworld(world))
+        {
+            printf("[*] UWorld resolved by scan: base+0x%llX -> 0x%llX\n",
+                   static_cast<unsigned long long>(at),
+                   static_cast<unsigned long long>(world));
+            return world;
+        }
+    }
+    return 0;
+}
+
 inline uintptr_t resolve_uworld()
 {
     const uintptr_t from_base = mem.read<uintptr_t>(mem.base + off::UWorld);
-    if (from_base) return from_base;
+    if (plausible_ptr(from_base) && looks_like_uworld(from_base)) return from_base;
 
-    const uintptr_t from_image = mem.read<uintptr_t>(mem.base + cfg::kUWorldFallback);
-    if (from_image) return from_image;
+    if (cfg::kUWorldFallback)
+    {
+        const uintptr_t from_image = mem.read<uintptr_t>(mem.base + cfg::kUWorldFallback);
+        if (plausible_ptr(from_image) && looks_like_uworld(from_image)) return from_image;
+    }
+
+    if (cfg::kAutoResolveUWorld)
+        return scan_for_uworld();
 
     return 0;
 }
@@ -8797,7 +8855,8 @@ inline void game_tick()
 {
     if (!mem.alive()) return;
 
-    cache::uworld = resolve_uworld();
+    if (!cache::uworld || !looks_like_uworld(cache::uworld))
+        cache::uworld = resolve_uworld();
     if (!cache::uworld) return;
 
     cache::game_instance = mem.read<uintptr_t>(cache::uworld + off::GameInstance);
@@ -9195,7 +9254,14 @@ int main()
 
     draw::create_font(overlay::device, draw::font, cfg::kFontPx, "Consolas");
 
-    printf("[*] base 0x%llX  pid %lu\n", (unsigned long long)mem.base, mem.pid);
+    printf("[*] base 0x%llX  pid %lu\n",
+           static_cast<unsigned long long>(mem.base), static_cast<unsigned long>(mem.pid));
+
+    if (!resolve_uworld())
+        printf("[!] UWorld not found - menu opens, ESP/aim stay idle until the scan hits\n");
+    else
+        printf("[*] UWorld ready\n");
+
     main_loop();
 
     overlay::release_font();
