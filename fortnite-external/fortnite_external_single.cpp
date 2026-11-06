@@ -138,6 +138,12 @@ namespace cfg
     constexpr uintptr_t kScanStartFallback = 0x8000000;
     constexpr uintptr_t kScanEndFallback   = 0x20000000;
 
+    // --- SceneComponent relative-block layout ------------------------------
+    // The dump gives 0x18 spacing for RelativeLocation / RelativeRotation /
+    // RelativeScale3D — consistent BOTH with 3 doubles (+8 pad) and with 3 floats
+    // (+4 pad). Instead of trusting either, the program probes the local pawn's
+    // root component at startup and uses whichever reads as a plausible component
+    // transform. This only overrides the probe; Auto is what you want.
     constexpr int   kFontPx        = 14;
     constexpr int   kMaxPlayers    = 256;
     constexpr int   kMaxChainDepth = 16;
@@ -601,6 +607,9 @@ namespace cache
     inline uintptr_t closest_mesh = 0;
     inline uintptr_t closest_pawn = 0;
     inline Vector3   closest_aim;        // the exact validated point the aimbot uses
+    inline Vector3   closest_centre;     // capsule centre, validated this tick
+    inline double    closest_half = 0.0;  // capsule half height used this tick
+    inline bool      closest_visible = false;
 
     inline Camera    camera;            // refreshed once per tick
 
@@ -609,19 +618,120 @@ namespace cache
 }
 
 // ---------------------------------------------------------------------------
+//  relative-block layout: float32 vs float64, decided on real memory
+// ---------------------------------------------------------------------------
+// Is this triple a plausible component translation? UE world coords land inside
+// +/-500k cm, and a component is never exactly at the origin lookalike of garbage.
+inline bool plausible_translation(double x, double y, double z, double limit)
+{
+    return std::isfinite(x) && std::isfinite(y) && std::isfinite(z) &&
+           std::fabs(x) < limit && std::fabs(y) < limit && std::fabs(z) < limit &&
+           (x != 0.0 || y != 0.0 || z != 0.0);
+}
+
+inline bool read_vec3_float(uintptr_t at, Vector3& out)
+{
+    float v[3] = { 0.f, 0.f, 0.f };
+    if (!mem.read_raw(at, v, sizeof(v))) return false;
+    out = Vector3(v[0], v[1], v[2]);
+    return std::isfinite(out.x) && std::isfinite(out.y) && std::isfinite(out.z);
+}
+
+inline bool read_vec3_double(uintptr_t at, Vector3& out)
+{
+    if (!mem.read(at, out)) return false;
+    return std::isfinite(out.x) && std::isfinite(out.y) && std::isfinite(out.z);
+}
+
+enum class VecLayout { Unknown = 0, Float32, Float64 };
+
+namespace layout
+{
+    // Decided once per session from the local pawn; see probe_vec_layout().
+    inline VecLayout relative = VecLayout::Unknown;
+}
+
+// Scores how much of `component` reads as a real local transform in each layout:
+// three finite translation components, a rotator with |pitch| <= 90, and a scale
+// within reason. Doubles read as floats would produce 4e-41 style denormals and a
+// float block read as doubles usually produces NaNs or absurd magnitudes, so the
+// winner is rarely ambiguous.
+inline VecLayout probe_vec_layout(uintptr_t component)
+{
+    if (!mem.alive() || !Mem::plausible_ptr(component)) return VecLayout::Unknown;
+
+    int score_f32 = 0, score_f64 = 0;
+
+    // translation
+    {
+        Vector3 v;
+        if (read_vec3_float(component + off::RelativeLocation, v) &&
+            plausible_translation(v.x, v.y, v.z, 500000.0)) ++score_f32;
+        if (read_vec3_double(component + off::RelativeLocation, v) &&
+            plausible_translation(v.x, v.y, v.z, 500000.0)) ++score_f64;
+    }
+
+    // rotation: pitch is stored first and is always within +/-90
+    {
+        float f[3] = { 0, 0, 0 };
+        if (mem.read_raw(component + off::RelativeRotation, f, sizeof(f)) &&
+            std::isfinite(f[0]) && std::fabs(f[0]) <= 90.5f && std::fabs(f[0]) <= 360.5f) ++score_f32;
+
+        Rotator r;
+        if (mem.read(component + off::RelativeRotation, r) &&
+            std::isfinite(r.pitch) && std::fabs(r.pitch) <= 90.5 && std::fabs(r.roll) <= 360.5) ++score_f64;
+    }
+
+    // scale: exactly 1.0 is the overwhelmingly common case
+    {
+        Vector3 v;
+        if (read_vec3_float(component + off::RelativeScale3D, v) &&
+            v.x > 0.001 && v.x < 1000.0 && v.y > 0.001 && v.y < 1000.0 && v.z > 0.001 && v.z < 1000.0) ++score_f32;
+        if (read_vec3_double(component + off::RelativeScale3D, v) &&
+            v.x > 0.001 && v.x < 1000.0 && v.y > 0.001 && v.y < 1000.0 && v.z > 0.001 && v.z < 1000.0) ++score_f64;
+    }
+
+    if (score_f32 > score_f64 && score_f32 >= 2) return VecLayout::Float32;
+    if (score_f64 > score_f32 && score_f64 >= 2) return VecLayout::Float64;
+
+    printf("[!] relative-block layout probe inconclusive (f32 %d / f64 %d)\n", score_f32, score_f64);
+    return VecLayout::Unknown;
+}
+
+// ---------------------------------------------------------------------------
 //  component transforms — world = compose(attach chain), no ComponentToWorld
 //  field in this dump (SceneComponent exposes only the relative block)
 // ---------------------------------------------------------------------------
 inline bool read_relative_block(uintptr_t component, Vector3& loc, Rotator& rot, Vector3& scale)
 {
-    // Three doubles per field. UE stores the relative transform with FVector3d /
-    // FRotator3d here, so the dump's 0x18 spacing is consistent with LWC even
-    // though UPROPERTY reflection widens it to FVector/FRotator. If a future dump
-    // shows 0x18 spacing with float-sized components, the assert in offsets_gen.hpp
-    // fires and this needs the float path instead.
-    if (!mem.read(component + off::RelativeLocation, loc)) return false;
-    if (!mem.read(component + off::RelativeRotation, rot)) return false;
-    if (!mem.read(component + off::RelativeScale3D, scale)) return false;
+    // The dump only states the field spacing (0x18), not the component width, so
+    // the width comes from layout::relative, decided by probe_vec_layout() on the
+    // local pawn. Until that probe has run, nothing is read at all.
+    if (layout::relative == VecLayout::Unknown) return false;
+
+    const uintptr_t at_loc = component + off::RelativeLocation;
+    const uintptr_t at_rot = component + off::RelativeRotation;
+    const uintptr_t at_scale = component + off::RelativeScale3D;
+
+    if (layout::relative == VecLayout::Float32)
+    {
+        // 3 floats + 4 pad per 0x18 slot
+        float r[3] = { 0, 0, 0 };
+        if (!read_vec3_float(at_loc, loc)) return false;
+        if (!mem.read_raw(at_rot, r, sizeof(r))) return false;
+        if (!read_vec3_float(at_scale, scale)) return false;
+
+        rot.pitch = r[0];
+        rot.yaw = r[1];
+        rot.roll = r[2];
+    }
+    else
+    {
+        // 3 doubles + 8 pad per 0x18 slot
+        if (!read_vec3_double(at_loc, loc)) return false;
+        if (!mem.read(at_rot, rot)) return false;
+        if (!read_vec3_double(at_scale, scale)) return false;
+    }
 
     return valid_vector(loc) && valid_rotator(rot) && valid_scale(scale);
 }
@@ -747,11 +857,29 @@ inline Camera get_view_point()
     // FCameraCacheEntry { double Timestamp @0x00; FMinimalViewInfo POV @0x10; }
     const uintptr_t pov = camera_manager + off::CameraCachePrivate + off::CameraPOV;
 
+    // POV layout is derived from the field spacing. With Location 0x00, Rotation
+    // 0x18 and FOV 0x30 the 0x18 step is either 3 doubles or 3 floats; the
+    // relative-block probe answers the same question for the same engine, but the
+    // camera is cheap to check independently, so it checks its own candidate.
     Vector3 location, rotation;
-    float   fov = 0.f;      // float, not double: FOV 0x30 / DesiredFOV 0x34 in the dump
 
-    if (!mem.read(pov + off::CameraLocation, location)) return view;
-    if (!mem.read(pov + off::CameraRotation, rotation)) return view;
+    {
+        Vector3 loc32, rot32, loc64, rot64;
+        const bool ok32 = read_vec3_float(pov + off::CameraLocation, loc32) &&
+                          read_vec3_float(pov + off::CameraRotation, rot32) &&
+                          plausible_translation(loc32.x, loc32.y, loc32.z, 5000000.0) &&
+                          std::fabs(rot32.x) <= 90.5 && std::fabs(rot32.z) <= 360.5;
+        const bool ok64 = read_vec3_double(pov + off::CameraLocation, loc64) &&
+                          read_vec3_double(pov + off::CameraRotation, rot64) &&
+                          plausible_translation(loc64.x, loc64.y, loc64.z, 5000000.0) &&
+                          std::fabs(rot64.x) <= 90.5 && std::fabs(rot64.z) <= 360.5;
+
+        if (ok32 && !ok64)      { location = loc32; rotation = rot32; }
+        else if (ok64 && !ok32) { location = loc64; rotation = rot64; }
+        else return view;       // neither layout describes this POV: refuse to guess
+    }
+
+    float fov = 0.f;      // float, not double: FOV 0x30 / DesiredFOV 0x34 in the dump
     if (!mem.read(pov + off::CameraFOV, fov)) return view;
 
     if (!valid_vector(location)) return view;
@@ -1838,6 +1966,9 @@ inline void game_tick()
     cache::closest_mesh = 0;
     cache::closest_pawn = 0;
     cache::closest_aim = Vector3();
+    cache::closest_centre = Vector3();
+    cache::closest_half = 0.0;
+    cache::closest_visible = false;
     cache::closest_distance = DBL_MAX;
 
     cache::camera = Camera{};
@@ -1925,6 +2056,29 @@ inline void game_tick()
     cache::player_array = data;
     cache::player_count = num;
 
+    // The layout probe needs the pawn, which only exists in a match. If startup
+    // ran in the lobby, or the game restarted, re-probe here — once per window,
+    // not every tick, and never while a target is being tracked.
+    if (layout::relative == VecLayout::Unknown && cache::local_pawn && mem.alive())
+    {
+        static ULONGLONG last_probe = 0;
+        const ULONGLONG now_probe = GetTickCount64();
+        if (now_probe - last_probe > 1000)
+        {
+            last_probe = now_probe;
+
+            uintptr_t root = 0;
+            if (mem.read(cache::local_pawn + off::RootComponent, root) && Mem::plausible_ptr(root))
+            {
+                layout::relative = probe_vec_layout(root);
+                if (layout::relative == VecLayout::Float32)
+                    printf("[*] relative block: float32 (3 floats + 4 pad per 0x18 slot)\n");
+                else if (layout::relative == VecLayout::Float64)
+                    printf("[*] relative block: float64 (3 doubles + 8 pad per 0x18 slot)\n");
+            }
+        }
+    }
+
     cache::camera = get_view_point();
     if (!cache::camera.valid)
     {
@@ -1976,17 +2130,22 @@ inline void game_tick()
 
         const bool visible = mesh ? is_visible(mesh) : false;
 
-        // --- visuals ------------------------------------------------------
-        if (settings::visuals::enable)
+        // capsule half-height and the aim point are needed by the box AND by the
+        // target gate, so they are resolved once here and reused
+        double half_used = cfg::kCapsuleHalfHeightFallback;
         {
-            double half = cfg::kCapsuleHalfHeightFallback;
             float capsule_half = 0.f;
             if (mem.read(pawn + off::CapsuleHalfHeight, capsule_half) &&
                 std::isfinite(capsule_half) && capsule_half > 1.f && capsule_half < 500.f)
-                half = capsule_half;
+                half_used = capsule_half;
+        }
 
-            // centre from the validated component transform, capsule half from the
-            // pawn; the box top follows the same aim point the FOV gate used
+        // --- visuals ------------------------------------------------------
+        if (settings::visuals::enable)
+        {
+            // `half_used` and `visible` were resolved once for this pawn, so the
+            // box and the FOV gate always describe the same body.
+            const double half = half_used;
 
             const Vector3 top(centre.x, centre.y, centre.z + half);
             const Vector3 bottom(centre.x, centre.y, centre.z - half);
@@ -2064,6 +2223,9 @@ inline void game_tick()
         cache::closest_mesh = mesh;
         cache::closest_pawn = pawn;
         cache::closest_aim = aim;
+        cache::closest_centre = centre;
+        cache::closest_half = half_used;
+        cache::closest_visible = visible;
     }
 }
 
@@ -2076,8 +2238,10 @@ inline void aimbot()
     if (!mem.alive()) return;
 
     // The tick already resolved and validated this exact point (bones when the
-    // bone path is wired, capsule otherwise). Reading the pawn again here could
-    // produce a different answer than the one the FOV gate accepted.
+    // bone path is wired, capsule otherwise), together with the camera it was
+    // validated against. Re-reading the game here would race the tick and could
+    // reproduce the very "target moved between gate and mouse" jitter the
+    // per-tick cache exists to remove.
     Vector3 aim = cache::closest_aim;
 
     if (!valid_vector(aim)) return;
@@ -2185,6 +2349,12 @@ inline void render_menu()
         draw::text(x, y, ui::kColTextDim, line); y += 22.f;
 
         snprintf(line, sizeof(line), "uworld: %s", cache::uworld_ready ? "validated" : "not resolved");
+        draw::text(x, y, ui::kColTextDim, line); y += 22.f;
+
+        snprintf(line, sizeof(line), "layout: %s",
+                 layout::relative == VecLayout::Float32 ? "relative block float32"
+               : layout::relative == VecLayout::Float64 ? "relative block float64"
+                                                        : "UNRESOLVED (start in a match)");
         draw::text(x, y, ui::kColTextDim, line); y += 22.f;
 
         snprintf(line, sizeof(line), "offsets: v43.00 dump, bones %s",
@@ -2361,6 +2531,7 @@ inline void main_loop()
                     scanner::prepared = false;
                     scanner::exhausted = false;
                     overlay::game_wnd = overlay::find_process_window(mem.pid);
+                    layout::relative = VecLayout::Unknown;   // same game, but re-probe on the next tick
                     printf("[*] attached: pid %lu base 0x%llX\n", static_cast<unsigned long>(mem.pid),
                            static_cast<unsigned long long>(mem.base));
                 }
@@ -2506,6 +2677,56 @@ int main(int argc, char** argv)
         if (!cache::uworld_ready)
             printf("[!] UWorld not resolved yet — menu opens, aim/ESP stay idle. "
                    "The bounded scan continues in the background.\n");
+    }
+
+    // Decide float32 vs float64 for the relative block (and by extension the POV
+    // vectors) on the local pawn's root component. Doing it once here means every
+    // later read uses one consistent layout instead of guessing per call.
+    {
+        uintptr_t root = 0;
+        bool probed = false;
+
+        for (int attempt = 0; attempt < 40 && !probed; ++attempt)
+        {
+            if (cache::uworld)
+            {
+                uintptr_t gi = 0;
+                if (mem.read(cache::uworld + off::GameInstance, gi) && Mem::plausible_ptr(gi))
+                {
+                    uintptr_t players = 0;
+                    if (mem.read(gi + off::LocalPlayers, players) && Mem::plausible_ptr(players))
+                    {
+                        uintptr_t local_player = 0;
+                        if (mem.read(players, local_player) && Mem::plausible_ptr(local_player))
+                        {
+                            uintptr_t pc = 0;
+                            if (mem.read(local_player + 0x30, pc) && Mem::plausible_ptr(pc))
+                            {
+                                uintptr_t pawn = 0;
+                                if (mem.read(pc + off::LocalPawn, pawn) && Mem::plausible_ptr(pawn))
+                                    mem.read(pawn + off::RootComponent, root);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (Mem::plausible_ptr(root))
+            {
+                layout::relative = probe_vec_layout(root);
+                probed = layout::relative != VecLayout::Unknown;
+            }
+
+            if (!probed) Sleep(500);   // wait for the match to load
+        }
+
+        if (layout::relative == VecLayout::Float32)
+            printf("[*] relative block: float32 (3 floats + 4 pad per 0x18 slot)\n");
+        else if (layout::relative == VecLayout::Float64)
+            printf("[*] relative block: float64 (3 doubles + 8 pad per 0x18 slot)\n");
+        else
+            printf("[!] relative block layout unresolved - aim/ESP stay off. "
+                   "Start this while a match is running, then reload.\n");
     }
 
     // bone aim is configured but not wired: say so once, with the offsets to check
