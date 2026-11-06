@@ -1,446 +1,58 @@
 // ============================================================================
-//  fortnite_external.cpp — single-file Fortnite external, transcribed from
-//  https://github.com/xetzzy/Fortnite-External-Source and re-pointed at an
-//  OffsetDeck dump (Fortnite v43.00, UE5).
+//  fortnite_external.cpp — user-mode external for Fortnite (UE5, v43.00 dump)
 //
-//  Original repo = km/ (WDM driver that swaps the win32k.sys NtUser callback
-//  qword for external phys-memory R/W) + um/ (D3D9Ex overlay in the UIAccess
-//  band, ImGui menu, aimbot via spoofed NtUserSendInput, ESP).
+//  Originally a transcription of https://github.com/xetzzy/Fortnite-External-Source
+//  (a WDM driver + a UIAccess overlay). This file is the user-mode half only:
 //
-//  This file is the same program with ImGui removed (third-party, ~57k lines).
-//  Everything the overlay used from it — font atlas, line/rect/text batching, a
-//  small immediate-mode menu — is reimplemented here in ~400 lines of D3D9, so
-//  the whole thing is one translation unit plus one generated header.
+//    * OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION)
+//    * ReadProcessMemory for every read
+//    * SendInput for the mouse
+//    * D3D9Ex layered overlay + the small immediate-mode menu
 //
-//  Compiles twice:
-//    * user mode   -> fortnite_external.exe   (default)
-//    * kernel mode -> driver                  (compile with _KERNEL_MODE, WDK)
+//  No driver, no physical-memory reads, no writes into the game, no injection,
+//  no syscall stubs, no token duplication — removed on purpose, not stubbed out.
 //
-//  UM build (MSVC x64, Developer prompt, from this folder):
-//    cl /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS fortnite_external.cpp ^
-//       /link /SUBSYSTEM:CONSOLE /OUT:fortnite_external.exe
+//  Build (MSVC x64 Developer prompt, this folder):
+//    cl /nologo /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS ^
+//       fortnite_external.cpp /link /SUBSYSTEM:CONSOLE ^
+//       /OUT:fortnite_external.exe ^
+//       d3d9.lib dwmapi.lib user32.lib gdi32.lib psapi.lib winmm.lib
 //
-//  KM build: new project from the WDK "Empty WDM Driver" template (not KMDF —
-//  the driver touches no framework calls), x64/Release, add this .cpp, add
-//  _KERNEL_MODE to preprocessor definitions, then
-//    msbuild .\fortnite_external.vcxproj /p:Configuration=Release /p:Platform=x64
+//  Cross build (Linux/macOS, zig or mingw-w64):
+//    ../tools/syntax_check.py            # same compile, used as the CI gate
 //
-//  Offsets come from offsets_gen.hpp — generated, not hand-written:
-//    python3 tools/gen_offsets.py tools/fortnite_offsets_43.00.json > offsets_gen.hpp
+//  Offsets: offsets_gen.hpp, generated from tools/fortnite_offsets_43.00.json.
+//  Regenerate per patch — never hand-edit the header:
+//    python3 tools/gen_offsets.py tools/fortnite_offsets_43.00.json \
+//        > fortnite-external/offsets_gen.hpp
 //
-//  Protocol between the two halves: a 48-byte DRIVER_REQUEST struct whose
-//  address is pushed into the kernel by calling NtUserRegisterErrorReportingDialog
-//  (win32u.sys -> win32k!g_ulCleanupRoutine). The driver redirects that qword
-//  during DriverEntry.
+//  Keys: INSERT menu · END unload · aim key (default RMB) HELD to aim
+//  Nothing fires on launch: aimbot and visuals start disabled.
 //
-//  Rootkit-level driver: test in a VM, and Defender/anti-cheat will flag the
-//  artefacts — exclude the build folder before you run anything.
+//  Run elevated; the game has to be windowed or borderless on the primary
+//  monitor.
 // ============================================================================
 
-
-// ============================================================================
-//  KERNEL MODE  (compile with /D_KERNEL_MODE)
-// ============================================================================
-#ifdef _KERNEL_MODE
-
-#include <ntifs.h>
-#include <stdint.h>
-
-#ifndef IMAGE_SCN_MEM_EXECUTE
-#define IMAGE_SCN_MEM_EXECUTE 0x20000000
-#endif
-#ifndef IMAGE_FIRST_SECTION
-#define IMAGE_FIRST_SECTION(ntheader) ((PIMAGE_SECTION_HEADER)((ULONG_PTR)(ntheader) + \
-    FIELD_OFFSET(IMAGE_NT_HEADERS64, OptionalHeader) + (ntheader)->FileHeader.SizeOfOptionalHeader))
-#endif
-
-static const uintptr_t pmask = (~0xfull << 8) & 0xfffffffffull;
-
-typedef enum _SYSTEM_INFORMATION_CLASS_LOCAL
-{
-    SystemModuleInformationLocal = 0x0B
-} SYSTEM_INFORMATION_CLASS_LOCAL;
-
-typedef struct _RTL_PROCESS_MODULE_INFORMATION_LOCAL
-{
-    HANDLE Section;
-    PVOID  MappedBase;
-    PVOID  ImageBase;
-    ULONG  ImageSize;
-    ULONG  Flags;
-    USHORT LoadOrderIndex;
-    USHORT InitOrderIndex;
-    USHORT LoadCount;
-    USHORT OffsetToFileName;
-    UCHAR  FullPathName[256];
-} RTL_PROCESS_MODULE_INFORMATION_LOCAL;
-
-typedef struct _RTL_PROCESS_MODULES_LOCAL
-{
-    ULONG NumberOfModules;
-    RTL_PROCESS_MODULE_INFORMATION_LOCAL Modules[1];
-} RTL_PROCESS_MODULES_LOCAL;
-
-enum REQUEST_TYPE : int { NONE, BASE, WRITE, READ };
-
-typedef struct _DRIVER_REQUEST_LOCAL
-{
-    REQUEST_TYPE type;
-    HANDLE       pid;
-    PVOID        address;
-    PVOID        buffer;
-    SIZE_T       size;
-    PVOID        base;
-} DRIVER_REQUEST_LOCAL, *PDRIVER_REQUEST_LOCAL;
-
-extern "C"
-{
-    NTSTATUS NTAPI ZwQuerySystemInformation(ULONG SystemInformationClass, PVOID SystemInformation,
-                                            ULONG SystemInformationLength, PULONG ReturnLength);
-    PVOID  NTAPI PsGetProcessSectionBaseAddress(PEPROCESS Process);
-}
-
-// --- original signature from km/main.cpp: 8 repeats of the same 26-byte stub
-#define nt_qword_sig \
-    "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x06\xFF\x15\x00\x00\x00\x00\x48\x83\xC4\x28\xC3\xCC" \
-    "\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x48\x83\xEC\x38\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x06" \
-    "\xFF\x15\x00\x00\x00\x00\x48\x83\xC4\x38\xC3\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x48\x83\xEC\x28" \
-    "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x06\xFF\x15\x00\x00\x00\x00\x48\x83\xC4\x28\xC3\xCC" \
-    "\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x48\x83\xEC\x28\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x06" \
-    "\xFF\x15\x00\x00\x00\x00\x48\x83\xC4\x28\xC3\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x48\x83\xEC\x28" \
-    "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x06\xFF\x15\x00\x00\x00\x00\x48\x83\xC4\x28\xC3\xCC" \
-    "\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x48\x83\xEC\x28\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x06" \
-    "\xFF\x15\x00\x00\x00\x00\x48\x83\xC4\x28\xC3\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x48\x83\xEC\x28" \
-    "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x06\xFF\x15\x00\x00\x00\x00\x48\x83\xC4\x28\xC3\xCC" \
-    "\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x48\x83\xEC\x28\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x06" \
-    "\xFF\x15\x00\x00\x00\x00\x48\x83\xC4\x28\xC3\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x48\x83\xEC\x38"
-
-#define nt_qword_mask "xxx????xxxxxxx????xxxxxxxxxxxxxxxxxxxxx????xxxxxxx????xxxxxxxxxxxxxxxxxxxxx????xxxxxxx????xxxxxxxxxxxxxxxxxxxxx????xxxxxxx????xxxxxxxxxxxxxxxxxxxxx????xxxxxxx????xxxxxxxxxxxxxxxxxxxxx????xxxxxxx????xxxxxxxxxxxxxxxxxxxxx????xxxxxxx????xxxxxxxxxxxxxxxxxxxxx????xxxxxxx????xxxxxxxxxxxxxxxxxx"
-
-namespace kmu
-{
-    static int kstrcmp(const char* a, const char* b)
-    {
-        while (*a && *a == *b) { ++a; ++b; }
-        return (unsigned char)*a - (unsigned char)*b;
-    }
-
-    static PVOID get_system_information(ULONG information_class)
-    {
-        ULONG size = 32;
-        char buffer[32];
-        ZwQuerySystemInformation(information_class, buffer, size, &size);
-
-        PVOID info = ExAllocatePoolZero(NonPagedPool, size, 0x736B6572 /* 'reks' as ULONG */);
-        if (!info) return 0;
-
-        if (ZwQuerySystemInformation(information_class, info, size, &size) != STATUS_SUCCESS)
-        {
-            ExFreePool(info);
-            return 0;
-        }
-        return info;
-    }
-
-    static uintptr_t get_kernel_module(const char* name)
-    {
-        const PRTL_PROCESS_MODULES_LOCAL info =
-            (PRTL_PROCESS_MODULES_LOCAL)get_system_information(SystemModuleInformationLocal);
-        if (!info) return 0;
-
-        for (ULONG i = 0; i < info->NumberOfModules; ++i)
-        {
-            const auto& module = info->Modules[i];
-            const char* file = (const char*)module.FullPathName + module.OffsetToFileName;
-            if (kstrcmp(file, name) == 0)
-            {
-                const uintptr_t address = (uintptr_t)module.ImageBase;
-                ExFreePool(info);
-                return address;
-            }
-        }
-        ExFreePool(info);
-        return 0;
-    }
-
-    static size_t kstrlen(const char* text)
-    {
-        size_t len = 0;
-        while (text[len]) ++len;
-        return len;
-    }
-
-    static uintptr_t pattern_scan_range(uintptr_t base, size_t range, const char* pattern, const char* mask)
-    {
-        range -= kstrlen(mask);
-        for (size_t i = 0; i < range; ++i)
-        {
-            const char* candidate = (const char*)(base + i);
-            const char* m = mask;
-            const char* p = pattern;
-            bool hit = true;
-            for (; *m; ++candidate, ++p, ++m)
-            {
-                if (*m == 'x' && *candidate != *p) { hit = false; break; }
-            }
-            if (hit) return base + i;
-        }
-        return 0;
-    }
-
-    static uintptr_t pattern_scan(uintptr_t base, const char* pattern, const char* mask)
-    {
-        const PIMAGE_NT_HEADERS64 headers =
-            (PIMAGE_NT_HEADERS64)(base + ((PIMAGE_DOS_HEADER)base)->e_lfanew);
-        const PIMAGE_SECTION_HEADER sections = IMAGE_FIRST_SECTION(headers);
-
-        for (USHORT i = 0; i < headers->FileHeader.NumberOfSections; i++)
-        {
-            const PIMAGE_SECTION_HEADER section = &sections[i];
-            if (section->Characteristics & IMAGE_SCN_MEM_EXECUTE)
-            {
-                const uintptr_t match = pattern_scan_range(base + section->VirtualAddress,
-                                                           section->Misc.VirtualSize, pattern, mask);
-                if (match) return match;
-            }
-        }
-        return 0;
-    }
-
-    static NTSTATUS read_physical_memory(PVOID address, PVOID buffer, SIZE_T size, PSIZE_T bytes)
-    {
-        if (!address) return STATUS_UNSUCCESSFUL;
-        MM_COPY_ADDRESS to_read = { 0 };
-        to_read.PhysicalAddress.QuadPart = (LONGLONG)address;
-        return MmCopyMemory(buffer, to_read, size, MM_COPY_MEMORY_PHYSICAL, bytes);
-    }
-
-    static NTSTATUS write_physical_memory(PVOID address, PVOID buffer, SIZE_T size, PSIZE_T bytes)
-    {
-        if (!address) return STATUS_UNSUCCESSFUL;
-        PHYSICAL_ADDRESS to_write = { 0 };
-        to_write.QuadPart = (LONGLONG)address;
-        PVOID mapped = MmMapIoSpaceEx(to_write, size, PAGE_READWRITE);
-        if (!mapped) return STATUS_UNSUCCESSFUL;
-        RtlCopyMemory(mapped, buffer, size);
-        *bytes = size;
-        MmUnmapIoSpace(mapped, size);
-        return STATUS_SUCCESS;
-    }
-
-    // --- CR3 handling / page-table walk, identical to km/utils.hpp -----------
-    static ULONG get_winver()
-    {
-        RTL_OSVERSIONINFOW ver = { 0 };
-        RtlGetVersion(&ver);
-        switch (ver.dwBuildNumber)
-        {
-        case 17134: case 17763:                 return 0x0278;
-        case 18362: case 18363:                 return 0x0280;
-        case 19041: case 19042: case 19043:
-        case 19044: case 19045:                 return 0x0388;
-        case 22000: case 22621:                 return 0x0390;
-        default:                                return 0x0390;
-        }
-    }
-
-    static uintptr_t saved_dirbase = 0;
-    static bool      already_attached = false;
-
-    static uintptr_t get_process_cr3(PEPROCESS pprocess)
-    {
-        if (!pprocess) return 0;
-        uintptr_t process_dirbase = *(uintptr_t*)((UINT8*)pprocess + 0x28);
-        if (process_dirbase == 0)
-        {
-            process_dirbase = *(uintptr_t*)((UINT8*)pprocess + get_winver());
-        }
-        if ((process_dirbase >> 0x38) == 0x40)
-        {
-            if (!already_attached)
-            {
-                KAPC_STATE apc_state{};
-                KeStackAttachProcess(pprocess, &apc_state);
-                saved_dirbase = __readcr3();
-                KeUnstackDetachProcess(&apc_state);
-                already_attached = true;
-            }
-            if (saved_dirbase) return saved_dirbase;
-        }
-        return process_dirbase;
-    }
-
-    static uintptr_t translate_linear(uintptr_t directory_table_base, uintptr_t virtual_address)
-    {
-        directory_table_base &= ~0xf;
-        uintptr_t pageoffset = virtual_address & ~(~0ull << 12);
-        uintptr_t pte  = (virtual_address >> 12) & 0x1ffll;
-        uintptr_t pt   = (virtual_address >> 21) & 0x1ffll;
-        uintptr_t pd   = (virtual_address >> 30) & 0x1ffll;
-        uintptr_t pdp  = (virtual_address >> 39) & 0x1ffll;
-        SIZE_T readsize = 0;
-
-        uintptr_t pdpe = 0;
-        read_physical_memory((PVOID)(directory_table_base + 8 * pdp), &pdpe, sizeof(pdpe), &readsize);
-        if (~pdpe & 1) return 0;
-
-        uintptr_t pde = 0;
-        read_physical_memory((PVOID)((pdpe & pmask) + 8 * pd), &pde, sizeof(pde), &readsize);
-        if (~pde & 1) return 0;
-
-        if (pde & 0x80)
-            return (pde & (~0ull << 42 >> 12)) + (virtual_address & ~(~0ull << 30));
-
-        uintptr_t ptraddr = 0;
-        read_physical_memory((PVOID)((pde & pmask) + 8 * pt), &ptraddr, sizeof(ptraddr), &readsize);
-        if (~ptraddr & 1) return 0;
-
-        if (ptraddr & 0x80)
-            return (ptraddr & pmask) + (virtual_address & ~(~0ull << 21));
-
-        virtual_address = 0;
-        read_physical_memory((PVOID)((ptraddr & pmask) + 8 * pte), &virtual_address, sizeof(virtual_address), &readsize);
-        virtual_address &= pmask;
-        if (!virtual_address) return 0;
-        return virtual_address + pageoffset;
-    }
-
-    static NTSTATUS read_process_memory(PDRIVER_REQUEST_LOCAL in)
-    {
-        if (!in->pid) return STATUS_UNSUCCESSFUL;
-        PEPROCESS process = 0;
-        PsLookupProcessByProcessId(in->pid, &process);
-        if (!process) return STATUS_UNSUCCESSFUL;
-
-        uintptr_t dirbase = get_process_cr3(process);
-        ObDereferenceObject(process);
-        if (!dirbase) return STATUS_UNSUCCESSFUL;
-
-        uintptr_t physical = translate_linear(dirbase, (uintptr_t)in->address);
-        if (!physical) return STATUS_UNSUCCESSFUL;
-
-        SIZE_T remaining = in->size;
-        SIZE_T done = 0;
-        while (remaining)
-        {
-            SIZE_T chunk = PAGE_SIZE - (physical & 0xFFF);
-            if (chunk > remaining) chunk = remaining;
-            SIZE_T bytes = 0;
-            if (!NT_SUCCESS(read_physical_memory((PVOID)physical, (PUCHAR)in->buffer + done, chunk, &bytes)))
-                return STATUS_PARTIAL_COPY;
-            done += chunk;
-            physical += chunk;
-            remaining -= chunk;
-        }
-        return STATUS_SUCCESS;
-    }
-
-    static NTSTATUS write_process_memory(PDRIVER_REQUEST_LOCAL in)
-    {
-        if (!in->pid) return STATUS_UNSUCCESSFUL;
-        PEPROCESS process = 0;
-        PsLookupProcessByProcessId(in->pid, &process);
-        if (!process) return STATUS_UNSUCCESSFUL;
-
-        uintptr_t dirbase = get_process_cr3(process);
-        ObDereferenceObject(process);
-        if (!dirbase) return STATUS_UNSUCCESSFUL;
-
-        uintptr_t physical = translate_linear(dirbase, (uintptr_t)in->address);
-        if (!physical) return STATUS_UNSUCCESSFUL;
-
-        SIZE_T remaining = in->size;
-        SIZE_T done = 0;
-        while (remaining)
-        {
-            SIZE_T chunk = PAGE_SIZE - (physical & 0xFFF);
-            if (chunk > remaining) chunk = remaining;
-            SIZE_T bytes = 0;
-            if (!NT_SUCCESS(write_physical_memory((PVOID)physical, (PUCHAR)in->buffer + done, chunk, &bytes)))
-                return STATUS_PARTIAL_COPY;
-            done += chunk;
-            physical += chunk;
-            remaining -= chunk;
-        }
-        return STATUS_SUCCESS;
-    }
-
-    static PVOID get_base_address(PDRIVER_REQUEST_LOCAL in)
-    {
-        if (!in->pid) return 0;
-        PEPROCESS process = 0;
-        PsLookupProcessByProcessId(in->pid, &process);
-        if (!process) return 0;
-        PVOID image_base = PsGetProcessSectionBaseAddress(process);
-        ObDereferenceObject(process);
-        return image_base;
-    }
-}
-
-static uintptr_t* g_callback_slot = nullptr;
-static uintptr_t  g_callback_original = 0;
-
-static long long request_handler(uintptr_t request)
-{
-    PDRIVER_REQUEST_LOCAL in = reinterpret_cast<PDRIVER_REQUEST_LOCAL>(request);
-    switch (in->type)
-    {
-    case BASE:  in->base = kmu::get_base_address(in);      break;
-    case WRITE: kmu::write_process_memory(in);             break;
-    case READ:  kmu::read_process_memory(in);              break;
-    default:                                               break;
-    }
-    return 0;
-}
-
-extern "C" VOID km_unload(PDRIVER_OBJECT)
-{
-    // put the original routine back so win32k does not call into freed code
-    if (g_callback_slot) *g_callback_slot = g_callback_original;
-}
-
-extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT drv, PUNICODE_STRING)
-{
-    const uintptr_t win32k = kmu::get_kernel_module("win32k.sys");
-    if (!win32k) return STATUS_FAILED_DRIVER_ENTRY;
-
-    const uintptr_t nt_qword = kmu::pattern_scan(win32k, nt_qword_sig, nt_qword_mask);
-    if (!nt_qword) return STATUS_FAILED_DRIVER_ENTRY;
-
-    // mov rax, [rip+disp32] -> resolve the qword the stub points at
-    const uintptr_t slot = nt_qword + *(int*)((PUCHAR)nt_qword + 3) + 7;
-
-    g_callback_slot = reinterpret_cast<uintptr_t*>(slot);
-    g_callback_original = *g_callback_slot;
-    *g_callback_slot = reinterpret_cast<uintptr_t>(&request_handler);
-
-    drv->DriverUnload = km_unload;
-    return STATUS_SUCCESS;
-}
-
-// ============================================================================
-//  USER MODE
-// ============================================================================
-#else // _KERNEL_MODE
-
-#include <Windows.h>
-#include <TlHelp32.h>
+// lowercase on purpose: MinGW/zig on Linux is case-sensitive, MSVC is not
+#include <windows.h>
+#include <tlhelp32.h>
+#include <psapi.h>     // EnumProcessModules
 #include <dwmapi.h>
 #include <d3d9.h>
 #include <cstdint>
+#include <cstddef>
 #include <cmath>
 #include <cfloat>
 #include <cstdio>
 #include <cstring>
 #include <vector>
-#include <psapi.h>
 
 #pragma comment(lib, "d3d9.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "psapi.lib")
-#pragma comment(lib, "advapi32.lib")   // tokens: OpenProcessToken/DuplicateTokenEx/PrivilegeCheck
+#pragma comment(lib, "winmm.lib")   // timeBeginPeriod(1): makes Sleep(4) mean 4ms
 
 // ---------------------------------------------------------------------------
 //  CONFIG — one place to tune. Menu overrides the mutable copies at runtime.
@@ -449,55 +61,70 @@ namespace cfg
 {
     constexpr const wchar_t* kProcessName = L"FortniteClient-Win64-Shipping.exe";
 
-    constexpr int   kTickMs        = 4;              // read/aim poll rate
+    constexpr int   kTickMs        = 4;              // poll rate (Sleep floor per loop)
     constexpr int   kAimKey        = VK_RBUTTON;     // held
     constexpr int   kMenuKey       = VK_INSERT;      // toggle
     constexpr int   kExitKey       = VK_END;         // hard unload
-    constexpr float kFovPx         = 150.f;
-    constexpr float kAimSmoothing  = 5.f;
-    constexpr int   kHeadBone      = 109;
-    constexpr float kMaxScreenStep = 60.f;           // px per tick, stops snapping across the screen
-    constexpr int   kRootBone      = 0;
+    constexpr float kFovPx         = 150.f;          // screen radius, pixels
+    constexpr float kAimSmoothing  = 5.f;            // higher = slower
+    constexpr float kMaxScreenStep = 60.f;           // px per tick, no cross-screen snaps
+    constexpr float kMinTargetPx   = 6.f;            // ignore targets closer than this to centre
     constexpr bool  kTeamCheck     = true;
-    // OffsetDeck gives byte offsets for bitfields but no bit index, so anything
-    // gated on a bit reads whole-byte by default and the bit checks are opt-in.
-    constexpr bool  kVisibleOnly   = false;          // aim only at recently-rendered meshes
-    constexpr bool  kSkipSpectators = false;
-    constexpr bool  kMarkDowned    = false;
+    constexpr float kMaxTargetM    = 400.f;          // metres; beyond that it is stale data
+    constexpr float kCapsuleHalfHeightFallback = 88.f;
+    constexpr float kNearPlane     = 1.0;            // world units; behind this = discard
 
-    // FILL: bRecentlyRendered bit inside the byte at off::RecentlyRendered (0x7E1).
-    //       Dump it: read that byte on a visible enemy vs an occluded one.
-    constexpr uint8_t kRecentlyRenderedBit = 0x01;   // used only when kVisibleOnly
-    // FILL: bIsSpectator bit inside the byte at off::bIsSpectator (PlayerState 0x282)
-    constexpr uint8_t bIsSpectatorBit      = 0x01;
-    // FILL: bIsDBNO bit inside the byte at off::bIsDBNO (FortPawn 0x892)
-    constexpr uint8_t bIsDBNOBit           = 0x01;
+    // --- visibility -------------------------------------------------------
+    // bRecentlyRendered (SkinnedMeshComponent 0x7E1) is a bitfield byte, and the
+    // dump gives the byte but NOT the bit. 0x01 below is a guess, so the feature
+    // is off by default and the bit is marked FILL.
+    // FILL: read that byte on a pawn you can see and one behind cover; the bit
+    //       that flips is the real one. Until then leave this false.
+    constexpr bool    kVisibleOnly         = false;
+    constexpr uint8_t kRecentlyRenderedBit = 0x01;   // FILL: unverified
 
-    constexpr bool  kUseCallbackDriver = true;       // false -> OpenProcess/ReadProcessMemory fallback
-    constexpr bool  kUseSpoofedInput   = true;       // false -> plain SendInput
-    constexpr bool  kTryUiAccessBand   = true;       // requires a signed binary in a trusted path
-    constexpr int   kFontPx            = 14;
+    // --- bones ------------------------------------------------------------
+    // Bone aiming needs the bone array: pointer, element stride and whether it
+    // is bone-space or component-space. The dump carries neither the pointer nor
+    // the stride, so this stays off and the aim point is derived from the
+    // capsule (Pawn::BaseEyeHeight over FortPawn::CapsuleHalfHeightFortPawn).
+    // FILL: see the BoneArray block in offsets_gen.hpp for the in-game recipe;
+    //       then fill kTransformStride / kBoneTransformsAreFloat and flip this.
+    constexpr bool  kBoneWorldLocations   = false;
+    constexpr int   kHeadBone             = 109;     // FILL: verify index < NumBones
+    constexpr uintptr_t kTransformStride  = 0x0;     // FILL: 0x60 (FTransform) or 0x30 (FTransform3f)
+    constexpr bool  kBoneTransformsAreFloat = false; // FILL: FTransform3f vs FTransform
 
-    // GWorld. Three chances, in order: the generated header, a manual value, then
-    // a runtime scan of the image's writable data for a self-consistent UWorld.
-    constexpr uintptr_t kUWorldFallback = 0x0;   // optional, if you have the number
+    // --- UWorld -----------------------------------------------------------
+    // The dump has no globals section, so GWorld is unknown. Resolution order:
+    //   1. argv --uworld 0x...          (validated, never trusted blindly)
+    //   2. off::UWorld if the dump ever ships it
+    //   3. bounded scan of the module's writable sections, chunked over several
+    //      ticks and rate-limited — never a full-range sweep inside one tick
+    constexpr uintptr_t kUWorldOverride    = 0x0;    // code default; --uworld wins
     constexpr bool      kAutoResolveUWorld = true;
-    // scan window: GWorld lives in the module's .data, well past the code
-    constexpr uintptr_t kScanStart = 0x8000000;
-    constexpr uintptr_t kScanEnd   = 0x20000000;
+    constexpr uintptr_t kScanChunkBytes    = 0x20000;   // 128 KiB per read
+    constexpr int       kScanChunksPerStep = 8;         // 1 MiB per step, then yield
+    constexpr int       kScanRetryMs       = 500;       // between scan steps
+    constexpr int       kResolveRetryMs    = 2000;      // between re-resolve attempts
+    constexpr size_t    kMaxScanSectionBytes = 0x8000000; // per section cap (128 MiB)
+    // Only used if the PE headers cannot be read for some reason.
+    constexpr uintptr_t kScanStartFallback = 0x8000000;
+    constexpr uintptr_t kScanEndFallback   = 0x20000000;
+
+    constexpr int   kFontPx        = 14;
+    constexpr int   kMaxPlayers    = 256;
+    constexpr int   kMaxChainDepth = 16;
+    constexpr const char* kConfigPath = "fortnite_external.cfg.json";
 }
 
 // ---------------------------------------------------------------------------
-//  OFFSETS — generated from an OffsetDeck Fortnite dump (v43.00), see
-//  tools/gen_offsets.py. Regenerate per patch, don't hand-edit offsets_gen.hpp.
-//
-//  `sch::table` keeps the full dump (240 structs, ~5900 fields) so new features
-//  can pull a field by name at runtime instead of regenerating the header.
+//  OFFSETS — generated from the v43.00 dump. Do not hand-edit the header.
 // ---------------------------------------------------------------------------
 #include "offsets_gen.hpp"
 
 // ---------------------------------------------------------------------------
-//  settings (um/settings.hpp)
+//  settings (runtime copies the menu mutates; defaults are all "off")
 // ---------------------------------------------------------------------------
 namespace settings
 {
@@ -519,135 +146,115 @@ namespace settings
     }
     namespace visuals
     {
-        inline bool enable   = false;
-        inline bool box      = false;
-        inline bool fill_box = false;
-        inline bool line     = false;
-        inline bool distance = false;
+        inline bool enable     = false;
+        inline bool box        = false;
+        inline bool fill_box   = false;
+        inline bool line       = false;
+        inline bool distance   = false;
         inline bool health_bar = false;
     }
 }
 
 // ---------------------------------------------------------------------------
-//  librarys (um/librarys.hpp)
+//  process access — one handle, closed on every exit path
 // ---------------------------------------------------------------------------
-namespace librarys
-{
-    inline HMODULE user32 = nullptr;
-    inline HMODULE win32u = nullptr;
-
-    inline bool init()
-    {
-        LoadLibraryA("user32.dll");
-        LoadLibraryA("win32u.dll");
-        user32 = GetModuleHandleA("user32.dll");
-        win32u = GetModuleHandleA("win32u.dll");
-        return user32 && win32u;
-    }
-}
-
-// ---------------------------------------------------------------------------
-//  driver client (um/driver.hpp)
-// ---------------------------------------------------------------------------
-namespace km
-{
-    enum REQUEST_TYPE : int { NONE, BASE, WRITE, READ };
-
-    struct DRIVER_REQUEST
-    {
-        REQUEST_TYPE type;
-        HANDLE       pid;
-        void*        address;
-        void*        buffer;
-        SIZE_T       size;
-        void*        base;
-    };
-}
-
 class Mem
 {
 public:
     DWORD     pid  = 0;
     uintptr_t base = 0;
 
+    Mem() = default;
+    Mem(const Mem&) = delete;
+    Mem& operator=(const Mem&) = delete;
+
+    ~Mem() { detach(); }
+
     bool attach(const wchar_t* process_name)
     {
+        detach();
+
         pid = find_pid(process_name);
         if (!pid) return false;
-
-        if (cfg::kUseCallbackDriver && setup_callback())
-        {
-            base = get_base_address();
-            if (base) return true;
-            via_driver = false;
-        }
 
         hproc = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
         if (!hproc) return false;
 
         HMODULE mods[1024];
         DWORD needed = 0;
-        if (!EnumProcessModules(hproc, mods, sizeof(mods), &needed)) return false;
+        if (!EnumProcessModules(hproc, mods, sizeof(mods), &needed) || needed < sizeof(HMODULE))
+        {
+            detach();
+            return false;
+        }
+
         base = reinterpret_cast<uintptr_t>(mods[0]);
-        return base != 0;
-    }
-
-    bool alive() const { return pid != 0 && base != 0; }
-
-    template <typename T>
-    T read(uintptr_t address)
-    {
-        T out{};
-        if (!address) return out;
-        read_raw(reinterpret_cast<void*>(address), &out, sizeof(T));
-        return out;
-    }
-
-    template <typename T>
-    void write(uintptr_t address, T value)
-    {
-        if (!address) return;
-        write_raw(reinterpret_cast<void*>(address), &value, sizeof(T));
-    }
-
-    bool read_raw(void* address, void* buffer, SIZE_T size)
-    {
-        if (via_driver)
+        if (!base)
         {
-            km::DRIVER_REQUEST req{};
-            req.type = km::READ;
-            req.pid  = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(pid));
-            req.address = address;
-            req.buffer  = buffer;
-            req.size    = size;
-            send_request(&req);
-            return true;
+            detach();
+            return false;
         }
-        return ReadProcessMemory(hproc, address, buffer, size, nullptr) != 0;
+        return true;
     }
 
-    void write_raw(void* address, void* buffer, SIZE_T size)
+    void detach()
     {
-        if (via_driver)
+        if (hproc)
         {
-            km::DRIVER_REQUEST req{};
-            req.type = km::WRITE;
-            req.pid  = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(pid));
-            req.address = address;
-            req.buffer  = buffer;
-            req.size    = size;
-            send_request(&req);
-            return;
+            CloseHandle(hproc);
+            hproc = nullptr;
         }
-        WriteProcessMemory(hproc, address, buffer, size, nullptr);
+        pid = 0;
+        base = 0;
+    }
+
+    bool alive() const { return hproc != nullptr && pid != 0 && base != 0; }
+
+    // Every read reports failure. Callers must not use `out` when this is false.
+    template <typename T>
+    bool read(uintptr_t address, T& out) const
+    {
+        out = T{};
+        if (!plausible(address) || address > UINTPTR_MAX - sizeof(T)) return false;
+
+        SIZE_T got = 0;
+        if (!ReadProcessMemory(hproc, reinterpret_cast<LPCVOID>(address), &out, sizeof(T), &got))
+            return false;
+        if (got != sizeof(T))
+        {
+            out = T{};
+            return false;
+        }
+        return true;
+    }
+
+    bool read_raw(uintptr_t address, void* buffer, SIZE_T size) const
+    {
+        if (!plausible(address) || !buffer || size == 0) return false;
+        if (address > UINTPTR_MAX - size) return false;
+
+        SIZE_T got = 0;
+        if (!ReadProcessMemory(hproc, reinterpret_cast<LPCVOID>(address), buffer, size, &got))
+            return false;
+        return got == size;
+    }
+
+    // Any address we are willing to hand to ReadProcessMemory. Alignment is NOT
+    // required: TeamIndex (0xF81) and bRecentlyRendered (0x7E1) are byte fields
+    // at unaligned offsets, and demanding 8-byte alignment silently broke both.
+    static bool plausible(uintptr_t p)
+    {
+        return p > 0x10000 && p < 0x7FFFFFFFFFFFULL;
+    }
+
+    // A value we are willing to treat as a pointer: range plus pointer alignment.
+    static bool plausible_ptr(uintptr_t p)
+    {
+        return p > 0x10000 && p < 0x7FFFFFFFFFFFULL && (p % sizeof(void*)) == 0;
     }
 
 private:
-    using nt_user_fn = long long(*)(uintptr_t);
-
-    nt_user_fn callback = nullptr;
-    HANDLE     hproc    = nullptr;
-    bool       via_driver = false;
+    HANDLE hproc = nullptr;
 
     static DWORD find_pid(const wchar_t* name)
     {
@@ -666,86 +273,26 @@ private:
         CloseHandle(snap);
         return found;
     }
-
-    bool setup_callback()
-    {
-        callback = reinterpret_cast<nt_user_fn>(
-            GetProcAddress(librarys::user32, "NtUserRegisterErrorReportingDialog"));
-        if (!callback)
-            callback = reinterpret_cast<nt_user_fn>(
-                GetProcAddress(librarys::win32u, "NtUserRegisterErrorReportingDialog"));
-        if (!callback) return false;
-        via_driver = true;
-        return true;
-    }
-
-    uintptr_t get_base_address()
-    {
-        km::DRIVER_REQUEST req{};
-        req.type = km::BASE;
-        req.pid  = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(pid));
-        send_request(&req);   // driver zeroes the struct before dispatching
-        return reinterpret_cast<uintptr_t>(req.base);
-    }
-
-    void send_request(km::DRIVER_REQUEST* out)
-    {
-        if (!callback) return;
-        callback(reinterpret_cast<uintptr_t>(out));
-    }
 };
 
 inline Mem mem;
 
 // ---------------------------------------------------------------------------
-//  input (um/input.hpp)
-//  Spoofed NtUserSendInput: the first 30 bytes of the real stub get copied into
-//  fresh RWX memory and invoked there, so the call does not originate from the
-//  user32 section. Validated before use; falls back to SendInput otherwise.
+//  input — SendInput only. MOUSEEVENTF_MOVE with accumulated sub-pixel residue.
 // ---------------------------------------------------------------------------
 namespace input
 {
-    inline BYTE        stub_bytes[30];
-    inline void*       stub_page = nullptr;
-    inline bool        ready     = false;
-    inline double      acc_x = 0.0, acc_y = 0.0;
-
-    inline bool init()
-    {
-        if (!cfg::kUseSpoofedInput) return true;
-
-        void* addr = reinterpret_cast<void*>(GetProcAddress(librarys::user32, "NtUserSendInput"));
-        if (!addr) addr = reinterpret_cast<void*>(GetProcAddress(librarys::win32u, "NtUserSendInput"));
-        if (!addr) return false;
-
-        memcpy(stub_bytes, addr, sizeof(stub_bytes));
-
-        // 4C 8B D1          mov r10, rcx
-        // B8 imm32          mov eax, <ssn>
-        if (!(stub_bytes[0] == 0x4C && stub_bytes[1] == 0x8B && stub_bytes[2] == 0xD1 && stub_bytes[3] == 0xB8))
-            return false;  // hooked / different stub shape -> use SendInput
-
-        stub_page = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-        if (!stub_page) return false;
-
-        memcpy(stub_page, stub_bytes, sizeof(stub_bytes));
-        ready = true;
-        return true;
-    }
-
-    inline bool send(UINT count, LPINPUT inputs, int size)
-    {
-        if (ready && stub_page)
-        {
-            using fn_t = LONG(NTAPI*)(UINT, LPINPUT, int);
-            const LONG status = reinterpret_cast<fn_t>(stub_page)(count, inputs, size);
-            if (status > 0) return true;
-        }
-        return SendInput(count, inputs, size) == count;
-    }
+    inline double acc_x = 0.0;
+    inline double acc_y = 0.0;
 
     inline bool move_mouse(double dx, double dy)
     {
+        if (!std::isfinite(dx) || !std::isfinite(dy)) return false;
+
+        // clamp per call so a bad frame can never fling the cursor across the desk
+        if (dx > 400.0) dx = 400.0; else if (dx < -400.0) dx = -400.0;
+        if (dy > 400.0) dy = 400.0; else if (dy < -400.0) dy = -400.0;
+
         acc_x += dx;
         acc_y += dy;
 
@@ -756,17 +303,17 @@ namespace input
         acc_x -= mx;
         acc_y -= my;
 
-        INPUT input{};
-        input.type       = INPUT_MOUSE;
-        input.mi.dx      = mx;
-        input.mi.dy      = my;
-        input.mi.dwFlags = MOUSEEVENTF_MOVE;
-        return send(1, &input, sizeof(input));
+        INPUT in{};
+        in.type       = INPUT_MOUSE;
+        in.mi.dx      = mx;
+        in.mi.dy      = my;
+        in.mi.dwFlags = MOUSEEVENTF_MOVE;
+        return SendInput(1, &in, sizeof(in)) == 1;
     }
 }
 
 // ---------------------------------------------------------------------------
-//  math + SDK (um/sdk.hpp)
+//  math + SDK (doubles end to end: this dump is LWC)
 // ---------------------------------------------------------------------------
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -791,198 +338,120 @@ struct Vector3
     double distance(const Vector3& v) const
     {
         const double dx = v.x - x, dy = v.y - y, dz = v.z - z;
-        return sqrt(dx * dx + dy * dy + dz * dz);
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
     }
 
     Vector3 operator-(const Vector3& v) const { return Vector3(x - v.x, y - v.y, z - v.z); }
+    Vector3 operator+(const Vector3& v) const { return Vector3(x + v.x, y + v.y, z + v.z); }
 };
 
-struct FQuat { double x, y, z, w; };
+// MinimalViewInfo: Location +0x00, Rotation +0x18, FOV +0x30 — three doubles per
+// vector, three per rotator. That spacing is asserted in offsets_gen.hpp, so a
+// dump with a different layout fails the build instead of skewing the W2S.
+static_assert(sizeof(Vector3) == 0x18, "Vector3 must be 3 doubles");
 
-// UE5 LWC: FQuat is double[4], FVector is double[3], so FTransform =
-// 32 (rot) + 24 (translation) + 8 (pad to 16) + 24 (scale) + 8 (pad) = 0x60.
-// FTransform3f (float path used by the renderer's cached bone arrays) = 0x30.
-struct FTransform
+struct Rotator
 {
-    FQuat   rot;          // 0x00
-    Vector3 translation;  // 0x20
-    char    pad[8];       // 0x38
-    Vector3 scale;        // 0x40
-    char    pad1[8];      // 0x58
+    double pitch = 0, yaw = 0, roll = 0;
+};
+static_assert(sizeof(Rotator) == 0x18, "Rotator must be 3 doubles");
 
-    D3DMATRIX to_matrix_with_scale() const
-    {
-        D3DMATRIX m{};
-        m._41 = static_cast<float>(translation.x);
-        m._42 = static_cast<float>(translation.y);
-        m._43 = static_cast<float>(translation.z);
-
-        const float x2 = static_cast<float>(rot.x + rot.x);
-        const float y2 = static_cast<float>(rot.y + rot.y);
-        const float z2 = static_cast<float>(rot.z + rot.z);
-        const float xx2 = static_cast<float>(rot.x) * x2;
-        const float yy2 = static_cast<float>(rot.y) * y2;
-        const float zz2 = static_cast<float>(rot.z) * z2;
-
-        const float sx = static_cast<float>(scale.x);
-        const float sy = static_cast<float>(scale.y);
-        const float sz = static_cast<float>(scale.z);
-
-        m._11 = (1.0f - (yy2 + zz2)) * sx;
-        m._22 = (1.0f - (xx2 + zz2)) * sy;
-        m._33 = (1.0f - (xx2 + yy2)) * sz;
-
-        const float yz2 = static_cast<float>(rot.y) * z2;
-        const float wx2 = static_cast<float>(rot.w) * x2;
-        m._32 = (yz2 - wx2) * sz;
-        m._23 = (yz2 + wx2) * sy;
-
-        const float xy2 = static_cast<float>(rot.x) * y2;
-        const float wz2 = static_cast<float>(rot.w) * z2;
-        m._21 = (xy2 - wz2) * sy;
-        m._12 = (xy2 + wz2) * sx;
-
-        const float xz2 = static_cast<float>(rot.x) * z2;
-        const float wy2 = static_cast<float>(rot.w) * y2;
-        m._31 = (xz2 + wy2) * sz;
-        m._13 = (xz2 - wy2) * sx;
-
-        m._14 = 0.0f; m._24 = 0.0f; m._34 = 0.0f; m._44 = 1.0f;
-        return m;
-    }
+// Column-in-row storage: translation lives in row 3 (row-vector convention,
+// p' = p * M), which is what the attach-chain compose below assumes.
+struct Mat4
+{
+    double m[4][4]{};
 };
 
-inline D3DMATRIX matrix_multiplication(const D3DMATRIX& a, const D3DMATRIX& b)
+inline Mat4 identity_matrix()
 {
-    D3DMATRIX o{};
-    const float* pa = &a._11;
-    const float* pb = &b._11;
-    float* po = &o._11;
+    Mat4 m{};
+    m.m[0][0] = m.m[1][1] = m.m[2][2] = m.m[3][3] = 1.0;
+    return m;
+}
+
+inline Mat4 matrix_multiplication(const Mat4& a, const Mat4& b)
+{
+    Mat4 o{};
     for (int r = 0; r < 4; ++r)
         for (int c = 0; c < 4; ++c)
         {
-            float sum = 0.f;
-            for (int k = 0; k < 4; ++k) sum += pa[r * 4 + k] * pb[k * 4 + c];
-            po[r * 4 + c] = sum;
+            double sum = 0.0;
+            for (int k = 0; k < 4; ++k) sum += a.m[r][k] * b.m[k][c];
+            o.m[r][c] = sum;
         }
     return o;
 }
 
-inline D3DMATRIX rotation_matrix(const Vector3& rot, const Vector3& origin = Vector3())
+inline bool finite_mat(const Mat4& m)
 {
-    // Unreal rotation (pitch, yaw, roll) in degrees -> column-vector basis
-    const float radpitch = static_cast<float>(rot.x * M_PI / 180.0);
-    const float radyaw   = static_cast<float>(rot.y * M_PI / 180.0);
-    const float radroll  = static_cast<float>(rot.z * M_PI / 180.0);
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c)
+            if (!std::isfinite(m.m[r][c])) return false;
+    return true;
+}
 
-    const float sp = sinf(radpitch), cp = cosf(radpitch);
-    const float sy = sinf(radyaw),   cy = cosf(radyaw);
-    const float sr = sinf(radroll),  cr = cosf(radroll);
+inline Mat4 rotation_matrix(const Rotator& rot)
+{
+    // Unreal rotator (pitch, yaw, roll) in degrees -> basis rows.
+    const double p = rot.pitch * M_PI / 180.0;
+    const double y = rot.yaw   * M_PI / 180.0;
+    const double r = rot.roll  * M_PI / 180.0;
 
-    D3DMATRIX m{};
-    m.m[0][0] = cp * cy;
-    m.m[0][1] = cp * sy;
-    m.m[0][2] = sp;
-    m.m[0][3] = 0.f;
-    m.m[1][0] = sr * sp * cy - cr * sy;
-    m.m[1][1] = sr * sp * sy + cr * cy;
-    m.m[1][2] = -sr * cp;
-    m.m[1][3] = 0.f;
-    m.m[2][0] = -(cr * sp * cy + sr * sy);
-    m.m[2][1] = cy * sr - cr * sp * sy;
-    m.m[2][2] = cr * cp;
-    m.m[2][3] = 0.f;
-    m.m[3][0] = static_cast<float>(origin.x);
-    m.m[3][1] = static_cast<float>(origin.y);
-    m.m[3][2] = static_cast<float>(origin.z);
-    m.m[3][3] = 1.f;
+    const double sp = std::sin(p), cp = std::cos(p);
+    const double sy = std::sin(y), cy = std::cos(y);
+    const double sr = std::sin(r), cr = std::cos(r);
+
+    Mat4 m = identity_matrix();
+    // X = forward, Y = right, Z = up
+    m.m[0][0] = cp * cy;              m.m[0][1] = cp * sy;              m.m[0][2] = sp;
+    m.m[1][0] = sr * sp * cy - cr * sy; m.m[1][1] = sr * sp * sy + cr * cy; m.m[1][2] = -sr * cp;
+    m.m[2][0] = cr * sp * cy + sr * sy; m.m[2][1] = cy * sr - cr * sp * sy; m.m[2][2] = cr * cp;
     return m;
 }
 
-inline D3DMATRIX identity_matrix()
+// Local transform of a SceneComponent: T * R * S with the translation in row 3.
+inline Mat4 local_transform_matrix(const Vector3& location, const Rotator& rotation, const Vector3& scale)
 {
-    D3DMATRIX m{};
-    m._11 = m._22 = m._33 = m._44 = 1.f;
-    return m;
-}
+    Mat4 out = rotation_matrix(rotation);
 
-// FVector3f read into a double Vector3 (the dump's world fields are float even
-// in UE5 — only the double-precision actor locations are LWC)
-inline Vector3 read_vector3f(uintptr_t address)
-{
-    return Vector3(mem.read<float>(address),
-                   mem.read<float>(address + 4),
-                   mem.read<float>(address + 8));
-}
+    out.m[0][0] *= scale.x; out.m[0][1] *= scale.x; out.m[0][2] *= scale.x;
+    out.m[1][0] *= scale.y; out.m[1][1] *= scale.y; out.m[1][2] *= scale.y;
+    out.m[2][0] *= scale.z; out.m[2][1] *= scale.z; out.m[2][2] *= scale.z;
 
-inline bool valid_vector(const Vector3& v)
-{
-    // reject NaN/denormals and anything outside the playable world box
-    const double limit = 200000.0;
-    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
-           fabs(v.x) < limit && fabs(v.y) < limit && fabs(v.z) < limit;
-}
-
-// SceneComponent local transform (relative loc / rot / scale) as a matrix,
-// column-vector convention to match D3D row-major storage.
-inline D3DMATRIX local_transform_matrix(const Vector3& location, const Vector3& rotation, const Vector3& scale)
-{
-    D3DMATRIX out = rotation_matrix(rotation);
-    out._11 = static_cast<float>(out._11 * scale.x);
-    out._12 = static_cast<float>(out._12 * scale.x);
-    out._13 = static_cast<float>(out._13 * scale.x);
-    out._21 = static_cast<float>(out._21 * scale.y);
-    out._22 = static_cast<float>(out._22 * scale.y);
-    out._23 = static_cast<float>(out._23 * scale.y);
-    out._31 = static_cast<float>(out._31 * scale.z);
-    out._32 = static_cast<float>(out._32 * scale.z);
-    out._33 = static_cast<float>(out._33 * scale.z);
-    out._41 = static_cast<float>(location.x);
-    out._42 = static_cast<float>(location.y);
-    out._43 = static_cast<float>(location.z);
+    out.m[3][0] = location.x;
+    out.m[3][1] = location.y;
+    out.m[3][2] = location.z;
     return out;
 }
 
-// Bone array. OffsetDeck does not expose `BoneArray`, only
-// SkeletalMeshComponent::CachedBoneSpaceTransforms (0x9B8), which the renderer
-// fills with FTransform3f (float, 0x30 stride). If you dump the real bone array
-// pointer, drop it into off::BoneArray and it wins over the cache path.
-inline D3DMATRIX cached_bone_matrix(uintptr_t mesh, int bone_id)
+// Playable-world sanity box. UE5 LWC doubles can hold far more than this, so
+// anything outside means we read stale or wrong memory.
+inline bool valid_vector(const Vector3& v, double limit = 500000.0)
 {
-    if (!mesh) return identity_matrix();
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
+           std::fabs(v.x) < limit && std::fabs(v.y) < limit && std::fabs(v.z) < limit;
+}
 
-    uintptr_t bones = off::BoneArray ? mem.read<uintptr_t>(mesh + off::BoneArray) : 0;
-    uintptr_t stride = 0x30;
-    if (!bones)
-    {
-        bones = mem.read<uintptr_t>(mesh + off::BoneSpaceTransforms);
-        stride = 0x30;
-    }
-    if (!bones) return identity_matrix();
+inline bool valid_rotator(const Rotator& r)
+{
+    return std::isfinite(r.pitch) && std::isfinite(r.yaw) && std::isfinite(r.roll) &&
+           std::fabs(r.pitch) <= 90.5 && std::fabs(r.yaw) <= 360.5 && std::fabs(r.roll) <= 360.5;
+}
 
-    const uintptr_t at = bones + static_cast<uintptr_t>(bone_id) * stride;
-
-    // FTransform3f: quat 0x00 (16B), translation 0x10 (12B), scale 0x20 (12B)
-    FTransform bone{};
-    bone.rot.x         = mem.read<float>(at + 0x00);
-    bone.rot.y         = mem.read<float>(at + 0x04);
-    bone.rot.z         = mem.read<float>(at + 0x08);
-    bone.rot.w         = mem.read<float>(at + 0x0C);
-    bone.translation.x = mem.read<float>(at + 0x10);
-    bone.translation.y = mem.read<float>(at + 0x14);
-    bone.translation.z = mem.read<float>(at + 0x18);
-    bone.scale.x       = mem.read<float>(at + 0x20);
-    bone.scale.y       = mem.read<float>(at + 0x24);
-    bone.scale.z       = mem.read<float>(at + 0x28);
-
-    return bone.to_matrix_with_scale();
+inline bool valid_scale(const Vector3& s)
+{
+    return std::isfinite(s.x) && std::isfinite(s.y) && std::isfinite(s.z) &&
+           std::fabs(s.x) > 1e-6 && std::fabs(s.y) > 1e-6 && std::fabs(s.z) > 1e-6 &&
+           std::fabs(s.x) < 1000.0 && std::fabs(s.y) < 1000.0 && std::fabs(s.z) < 1000.0;
 }
 
 struct Camera
 {
     Vector3 location;
-    Vector3 rotation;   // pitch, yaw, roll in degrees
-    float   fov = 90.f;
+    Rotator rotation;
+    double  fov = 90.0;
+    bool    valid = false;
 };
 
 namespace cache
@@ -992,360 +461,609 @@ namespace cache
     inline uintptr_t local_players = 0;
     inline uintptr_t player_controller = 0;
     inline uintptr_t local_pawn = 0;
-    inline uintptr_t local_root = 0;
     inline uintptr_t player_state = 0;
     inline uintptr_t game_state = 0;
     inline uintptr_t player_array = 0;
-
-    inline Vector3   relative_location;
-    inline int       my_team_id = 0;
     inline int       player_count = 0;
 
-    inline float     closest_distance = 0.f;
+    inline Vector3   local_origin;      // capsule centre of the local pawn
+    inline int       my_team_id = 0;
+    inline bool      my_team_valid = false;
+
+    inline double    closest_distance = DBL_MAX;
     inline uintptr_t closest_mesh = 0;
+    inline uintptr_t closest_pawn = 0;
 
-    inline Camera    camera;   // refreshed once per tick, not once per projection
+    inline Camera    camera;            // refreshed once per tick
+
+    inline bool      uworld_ready = false;
+    inline ULONGLONG last_resolve_ms = 0;
 }
 
-// The one number the dump does not ship: GWorld (the UWorld**) base offset in
-// FortniteClient-Win64-Shipping.exe. It changes every patch.
-// Cheap validity gate used while scanning: every hop must land in user space and
-// be 8-byte aligned, which kills the vast majority of false positives.
-inline bool plausible_ptr(uintptr_t p)
+// ---------------------------------------------------------------------------
+//  component transforms — world = compose(attach chain), no ComponentToWorld
+//  field in this dump (SceneComponent exposes only the relative block)
+// ---------------------------------------------------------------------------
+inline bool read_relative_block(uintptr_t component, Vector3& loc, Rotator& rot, Vector3& scale)
 {
-    return p > 0x10000 && p < 0x7FFFFFFFFFFFULL && (p % sizeof(void*)) == 0;
+    // three doubles per field, spacing asserted in offsets_gen.hpp
+    if (!mem.read(component + off::RelativeLocation, loc)) return false;
+    if (!mem.read(component + off::RelativeRotation, rot)) return false;
+    if (!mem.read(component + off::RelativeScale3D, scale)) return false;
+
+    return valid_vector(loc) && valid_rotator(rot) && valid_scale(scale);
 }
 
-// Is `candidate` a UWorld? Walk the two pointers the cheat actually needs and
-// check they resolve: OwningGameInstance -> LocalPlayers (a TArray's data ptr),
-// and GameState. Two independent hops landing as pointers is a very strong
-// signature; a random qword in .data almost never passes both.
-inline bool looks_like_uworld(uintptr_t candidate)
+inline bool build_component_to_world(uintptr_t component, Mat4& world)
 {
-    if (!plausible_ptr(candidate)) return false;
+    world = identity_matrix();
+    if (!mem.alive() || !Mem::plausible_ptr(component)) return false;
 
-    const uintptr_t game_instance = mem.read<uintptr_t>(candidate + off::GameInstance);
-    if (!plausible_ptr(game_instance)) return false;
+    Mat4 chain[cfg::kMaxChainDepth];
+    int depth = 0;
+    uintptr_t current = component;
 
-    const uintptr_t local_players = mem.read<uintptr_t>(game_instance + off::LocalPlayers);
-    if (!plausible_ptr(local_players)) return false;
-
-    const uintptr_t game_state = mem.read<uintptr_t>(candidate + off::GameState);
-    if (!plausible_ptr(game_state)) return false;
-
-    // GameStateBase::PlayerArray is a TArray; its Data ptr must be valid too
-    const uintptr_t player_array = mem.read<uintptr_t>(game_state + off::PlayerArray);
-    if (!plausible_ptr(player_array)) return false;
-
-    return true;
-}
-
-inline uintptr_t scan_for_uworld()
-{
-    for (uintptr_t at = cfg::kScanStart; at < cfg::kScanEnd; at += sizeof(uintptr_t))
+    while (current && depth < cfg::kMaxChainDepth)
     {
-        const uintptr_t world = mem.read<uintptr_t>(mem.base + at);
-        if (!plausible_ptr(world)) continue;
+        Vector3 loc, scale;
+        Rotator rot;
+        if (!read_relative_block(current, loc, rot, scale)) break;
 
-        if (looks_like_uworld(world))
-        {
-            printf("[*] UWorld resolved by scan: base+0x%llX -> 0x%llX\n",
-                   static_cast<unsigned long long>(at),
-                   static_cast<unsigned long long>(world));
-            return world;
-        }
-    }
-    return 0;
-}
+        chain[depth++] = local_transform_matrix(loc, rot, scale);
 
-inline uintptr_t resolve_uworld()
-{
-    const uintptr_t from_base = mem.read<uintptr_t>(mem.base + off::UWorld);
-    if (plausible_ptr(from_base) && looks_like_uworld(from_base)) return from_base;
-
-    if (cfg::kUWorldFallback)
-    {
-        const uintptr_t from_image = mem.read<uintptr_t>(mem.base + cfg::kUWorldFallback);
-        if (plausible_ptr(from_image) && looks_like_uworld(from_image)) return from_image;
+        uintptr_t parent = 0;
+        if (!mem.read(current + off::AttachParent, parent)) break;
+        if (parent && !Mem::plausible_ptr(parent)) break;
+        current = parent;
     }
 
-    if (cfg::kAutoResolveUWorld)
-        return scan_for_uworld();
+    if (depth == 0) return false;
 
-    return 0;
+    // chain[0] is the deepest component; the root cap is applies last
+    for (int i = depth - 1; i >= 0; --i)
+        world = matrix_multiplication(chain[i], world);
+
+    return finite_mat(world);
 }
 
-// Camera comes from APlayerCameraManager::CameraCachePrivate (FCameraCacheEntry),
-// whose first member after the timestamp is FMinimalViewInfo POV at +0x10:
-//   POV+0x00 FVector Location, POV+0x18 FRotator Rotation, POV+0x30 float FOV.
-// This replaces the original source's UWorld+0x110/0x120 double-matrix hack,
-// which does not exist with the same layout in UE5.
+inline bool component_world_location(uintptr_t component, Vector3& out)
+{
+    Mat4 world;
+    if (!build_component_to_world(component, world)) return false;
+
+    out = Vector3(world.m[3][0], world.m[3][1], world.m[3][2]);
+    return valid_vector(out);
+}
+
+// Bone path. Disabled by default (cfg::kBoneWorldLocations): the dump does not
+// say whether CachedBoneSpaceTransforms is bone-space or component-space, nor
+// whether the stride is FTransform (0x60) or FTransform3f (0x30).
+// FILL: see the BoneArray block in offsets_gen.hpp — then set kTransformStride,
+//       kBoneTransformsAreFloat and flip kBoneWorldLocations.
+inline bool bone_component_location(uintptr_t mesh, int bone_id, Vector3& out)
+{
+    if (!cfg::kBoneWorldLocations) return false;
+    if (!mem.alive() || !mesh || bone_id < 0) return false;
+    if (cfg::kTransformStride < 0x20) return false;      // stride not filled in yet
+
+    // Preferred: the real bone array pointer if someone dumps it into off::BoneArray.
+    // Fallback: CachedComponentSpaceTransforms (a TArray; its data pointer is at
+    // the field offset). Component space is what we can use without a per-bone
+    // parent walk, which this dump does not give us.
+    uintptr_t array = 0;
+    const uintptr_t field = off::BoneArray ? off::BoneArray : off::ComponentSpaceTransforms;
+    if (!mem.read(mesh + field, array)) return false;
+    if (!Mem::plausible_ptr(array)) return false;
+
+    const uintptr_t at = array + static_cast<uintptr_t>(bone_id) * cfg::kTransformStride;
+    if (!Mem::plausible(at)) return false;
+
+    Vector3 translation;
+    Vector3 scale(1.0, 1.0, 1.0);
+
+    if (cfg::kBoneTransformsAreFloat)
+    {
+        float t[3] = { 0, 0, 0 };
+        if (!mem.read_raw(at + 0x10, t, sizeof(t))) return false;
+        translation = Vector3(t[0], t[1], t[2]);
+
+        float s[3] = { 1, 1, 1 };
+        if (mem.read_raw(at + 0x20, s, sizeof(s))) scale = Vector3(s[0], s[1], s[2]);
+    }
+    else
+    {
+        if (!mem.read(at + 0x20, translation)) return false;
+        if (!mem.read(at + 0x40, scale)) return false;
+    }
+
+    if (!valid_vector(translation) || !valid_scale(scale)) return false;
+
+    out = translation;
+    return valid_vector(out);
+}
+
+inline bool bone_world_location(uintptr_t mesh, int bone_id, Vector3& out)
+{
+    Vector3 local;
+    if (!bone_component_location(mesh, bone_id, local)) return false;
+
+    Mat4 c2w;
+    if (!build_component_to_world(mesh, c2w)) return false;
+
+    // row-vector: p_world = p_local * component_to_world
+    const double x = local.x * c2w.m[0][0] + local.y * c2w.m[1][0] + local.z * c2w.m[2][0] + c2w.m[3][0];
+    const double y = local.x * c2w.m[0][1] + local.y * c2w.m[1][1] + local.z * c2w.m[2][1] + c2w.m[3][1];
+    const double z = local.x * c2w.m[0][2] + local.y * c2w.m[1][2] + local.z * c2w.m[2][2] + c2w.m[3][2];
+
+    out = Vector3(x, y, z);
+    return valid_vector(out);
+}
+
+// ---------------------------------------------------------------------------
+//  camera + projection
+// ---------------------------------------------------------------------------
 inline Camera get_view_point()
 {
     Camera view{};
 
-    if (!cache::player_controller) return view;
+    if (!mem.alive() || !Mem::plausible_ptr(cache::player_controller)) return view;
 
-    const uintptr_t camera_manager = mem.read<uintptr_t>(cache::player_controller + off::PlayerCameraManager);
-    if (!camera_manager) return view;
+    uintptr_t camera_manager = 0;
+    if (!mem.read(cache::player_controller + off::PlayerCameraManager, camera_manager)) return view;
+    if (!Mem::plausible_ptr(camera_manager)) return view;
 
-    const uintptr_t cache_entry = camera_manager + off::CameraCachePrivate;
-    const uintptr_t pov = cache_entry + off::CameraPOV;
+    // FCameraCacheEntry { double Timestamp @0x00; FMinimalViewInfo POV @0x10; }
+    const uintptr_t pov = camera_manager + off::CameraCachePrivate + off::CameraPOV;
 
-    const Vector3 location = read_vector3f(pov + off::CameraLocation);
-    const Vector3 rotation = read_vector3f(pov + off::CameraRotation);   // pitch, yaw, roll
-    float fov = mem.read<float>(pov + off::CameraFOV);
+    Vector3 location, rotation;
+    float   fov = 0.f;      // float, not double: FOV 0x30 / DesiredFOV 0x34 in the dump
 
-    if (!(fov > 1.f && fov < 180.f)) fov = 90.f;
+    if (!mem.read(pov + off::CameraLocation, location)) return view;
+    if (!mem.read(pov + off::CameraRotation, rotation)) return view;
+    if (!mem.read(pov + off::CameraFOV, fov)) return view;
+
+    if (!valid_vector(location)) return view;
+    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y) || !std::isfinite(rotation.z)) return view;
+
+    // FOV is horizontal degrees; outside this it is a read from the wrong offset
+    if (!std::isfinite(fov) || fov <= 1.f || fov >= 180.f) return view;
 
     view.location = location;
-    view.rotation = rotation;
-    view.fov = fov;
+    view.rotation.pitch = rotation.x;   // rotation is stored as (pitch, yaw, roll)
+    view.rotation.yaw   = rotation.y;
+    view.rotation.roll  = rotation.z;
+    view.fov = static_cast<double>(fov);
+    view.valid = valid_rotator(view.rotation);
     return view;
 }
 
-// Rotation-basis projection off the cached camera. Unreal convention, Y inverted.
-inline Vector2 project_world_to_screen(const Vector3& world)
+// World -> screen. UE basis (X forward, Y right, Z up), camera rotator projected
+// onto its own axes, screen Y flipped. Returns false for anything at or behind
+// the near plane instead of clamping depth to 1 (which used to draw targets
+// behind the player as if they were in front).
+inline bool project_world_to_screen(const Vector3& world, Vector2& out,
+                                    const Camera& camera = cache::camera)
 {
-    const D3DMATRIX m = rotation_matrix(cache::camera.rotation);
+    if (!camera.valid) return false;
+    if (settings::center_x <= 0 || settings::center_y <= 0) return false;
+    if (!valid_vector(world)) return false;
 
-    const Vector3 axis_x(m.m[0][0], m.m[0][1], m.m[0][2]);
-    const Vector3 axis_y(m.m[1][0], m.m[1][1], m.m[1][2]);
-    const Vector3 axis_z(m.m[2][0], m.m[2][1], m.m[2][2]);
+    const Mat4 basis = rotation_matrix(camera.rotation);
 
-    const Vector3 delta = world - cache::camera.location;
-    Vector3 transformed(delta.dot(axis_y), delta.dot(axis_z), delta.dot(axis_x));
-    if (transformed.z < 1.0) transformed.z = 1.0;
+    const Vector3 axis_forward(basis.m[0][0], basis.m[0][1], basis.m[0][2]);
+    const Vector3 axis_right  (basis.m[1][0], basis.m[1][1], basis.m[1][2]);
+    const Vector3 axis_up     (basis.m[2][0], basis.m[2][1], basis.m[2][2]);
 
-    const double f = (settings::center_x / tan(cache::camera.fov * M_PI / 360.0)) / transformed.z;
-    return Vector2(settings::center_x + transformed.x * f,
-                   settings::center_y - transformed.y * f);
+    const Vector3 delta = world - camera.location;
+
+    const double forward = delta.dot(axis_forward);
+    if (!(forward > cfg::kNearPlane)) return false;    // behind or on the camera plane
+
+    const double right = delta.dot(axis_right);
+    const double up    = delta.dot(axis_up);
+
+    const double focal = (settings::center_x / std::tan(camera.fov * M_PI / 360.0));
+    if (!std::isfinite(focal) || focal <= 0.0) return false;
+
+    const double sx = settings::center_x + right * focal / forward;
+    const double sy = settings::center_y - up    * focal / forward;
+
+    if (!std::isfinite(sx) || !std::isfinite(sy)) return false;
+
+    out = Vector2(sx, sy);
+    return true;
 }
 
-// ComponentToWorld is private in this dump (SceneComponent exposes only the
-// relative transform + AttachParent), so the world transform is rebuilt by
-// walking up the attach chain and composing:
-//   world = parent_world * local(relative loc/rot/scale)
-// Depth-capped because a broken AttachParent link reads as garbage, and the
-// cheap range checks below reject those instead of letting NaN into the W2S.
-inline D3DMATRIX build_component_to_world(uintptr_t component)
-{
-    D3DMATRIX world = identity_matrix();
-
-    D3DMATRIX chain[16];
-    int depth = 0;
-    uintptr_t current = component;
-
-    while (current && depth < 16)
-    {
-        // FRotator = 3 floats (pitch, yaw, roll); FVector = 3 floats
-        const Vector3 loc   = read_vector3f(current + off::RelativeLocation);
-        const Vector3 rot   = read_vector3f(current + off::RelativeRotation);
-        const Vector3 scale = read_vector3f(current + off::RelativeScale3D);
-
-        if (!valid_vector(loc) || !valid_vector(scale)) break;
-
-        chain[depth++] = local_transform_matrix(loc, rot, scale);
-        current = mem.read<uintptr_t>(current + off::AttachParent);
-    }
-
-    for (int i = depth - 1; i >= 0; --i)
-        world = matrix_multiplication(chain[i], world);
-
-    return world;
-}
-
-inline Vector3 bone_world_location(uintptr_t mesh, int bone_id)
-{
-    if (!mesh || bone_id < 0) return Vector3();
-
-    const D3DMATRIX bone_to_component = cached_bone_matrix(mesh, bone_id);
-    const D3DMATRIX component_to_world = build_component_to_world(mesh);
-
-    const D3DMATRIX world = matrix_multiplication(bone_to_component, component_to_world);
-    const Vector3 out(world._41, world._42, world._43);
-
-    return valid_vector(out) ? out : Vector3();
-}
-
-// alias kept so the original source's naming still reads the same
-inline Vector3 get_entity_bone(uintptr_t mesh, int bone_id) { return bone_world_location(mesh, bone_id); }
-
-// bRecentlyRendered is the dump's replacement for LastSubmitTime /
-// LastRenderTimeOnScreen (those moved to private PrimitiveComponent::SceneProxy
-// bookkeeping). It is a bitfield, one bit at 0x7E1.
+// bRecentlyRendered bit — FILL, see cfg::kVisibleOnly
 inline bool is_visible(uintptr_t mesh)
 {
-    if (!mesh) return false;
-    const uint8_t flags = mem.read<uint8_t>(mesh + off::RecentlyRendered);
+    if (!mesh || !mem.alive()) return false;
+
+    uint8_t flags = 0;
+    if (!mem.read(mesh + off::RecentlyRendered, flags)) return false;
     return (flags & cfg::kRecentlyRenderedBit) != 0;
 }
 
 // ---------------------------------------------------------------------------
-//  UIACCESS band window (um/gui.hpp)
+//  UWorld resolution — validated offset first, bounded chunked scan second
 // ---------------------------------------------------------------------------
-namespace gui
+inline bool looks_like_uworld(uintptr_t candidate)
 {
-    using fn_create_window_in_band = HWND(WINAPI*)(DWORD, ATOM, LPCWSTR, DWORD, int, int, int, int,
-                                                   HWND, HMENU, HINSTANCE, LPVOID, DWORD);
+    if (!Mem::plausible_ptr(candidate)) return false;
 
-    enum ZBID
+    uintptr_t game_instance = 0, local_players = 0, game_state = 0, player_array = 0;
+
+    if (!mem.read(candidate + off::GameInstance, game_instance)) return false;
+    if (!Mem::plausible_ptr(game_instance)) return false;
+
+    if (!mem.read(game_instance + off::LocalPlayers, local_players)) return false;
+    if (!Mem::plausible_ptr(local_players)) return false;
+
+    if (!mem.read(candidate + off::GameState, game_state)) return false;
+    if (!Mem::plausible_ptr(game_state)) return false;
+
+    // GameStateBase::PlayerArray is a TArray: its data pointer must be readable
+    if (!mem.read(game_state + off::PlayerArray, player_array)) return false;
+    if (!Mem::plausible_ptr(player_array)) return false;
+
+    return true;
+}
+
+struct ScanSection
+{
+    uintptr_t start;
+    size_t    size;
+};
+
+namespace scanner
+{
+    inline std::vector<ScanSection> sections;
+    inline size_t    index = 0;
+    inline uintptr_t cursor = 0;
+    inline bool      prepared = false;
+    inline bool      exhausted = false;
+    inline ULONGLONG next_step_ms = 0;
+
+    inline ULONGLONG now_ms()
     {
-        ZBID_DEFAULT = 0,
-        ZBID_DESKTOP = 1,
-        ZBID_UIACCESS = 2,
-    };
-
-    inline fn_create_window_in_band create_window_in_band = nullptr;
-
-    inline DWORD duplicate_winlogon_token(DWORD session_id, DWORD desired_access, PHANDLE out_token)
-    {
-        DWORD err = ERROR_NOT_FOUND;
-        PRIVILEGE_SET ps{};
-        ps.PrivilegeCount = 1;
-        ps.Control = PRIVILEGE_SET_ALL_NECESSARY;
-        if (!LookupPrivilegeValueA(nullptr, SE_TCB_NAME, &ps.Privilege[0].Luid)) return GetLastError();
-
-        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (snap == INVALID_HANDLE_VALUE) return GetLastError();
-
-        PROCESSENTRY32W pe{};
-        pe.dwSize = sizeof(pe);
-        bool found = false;
-        for (BOOL cont = Process32FirstW(snap, &pe); cont; cont = Process32NextW(snap, &pe))
-        {
-            if (_wcsicmp(pe.szExeFile, L"winlogon.exe") != 0) continue;
-
-            HANDLE process_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
-            if (!process_handle) continue;
-
-            HANDLE token_handle = nullptr;
-            if (OpenProcessToken(process_handle, TOKEN_QUERY | TOKEN_DUPLICATE, &token_handle))
-            {
-                BOOL has_tcb = FALSE;
-                DWORD retlen = 0, sid = 0;
-                if (PrivilegeCheck(token_handle, &ps, &has_tcb) && has_tcb &&
-                    GetTokenInformation(token_handle, TokenSessionId, &sid, sizeof(sid), &retlen) &&
-                    sid == session_id)
-                {
-                    found = true;
-                    if (DuplicateTokenEx(token_handle, desired_access, nullptr, SecurityImpersonation,
-                                         TokenImpersonation, out_token))
-                        err = ERROR_SUCCESS;
-                    else
-                        err = GetLastError();
-                }
-                CloseHandle(token_handle);
-            }
-            CloseHandle(process_handle);
-            if (found) break;
-        }
-        CloseHandle(snap);
-        return err;
+        return GetTickCount64();
     }
 
-    inline DWORD create_ui_access_token(PHANDLE out_token)
+    inline bool prepare(uintptr_t module_base)
     {
-        DWORD err = ERROR_SUCCESS;
-        HANDLE self_token = nullptr;
-        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &self_token))
-            return GetLastError();
+        sections.clear();
+        index = 0;
+        cursor = 0;
+        exhausted = false;
+        prepared = true;
 
-        DWORD session_id = 0, retlen = 0;
-        if (!GetTokenInformation(self_token, TokenSessionId, &session_id, sizeof(session_id), &retlen))
+        IMAGE_DOS_HEADER dos{};
+        if (!mem.read_raw(module_base, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE)
         {
-            CloseHandle(self_token);
-            return GetLastError();
+            sections.push_back({ cfg::kScanStartFallback, cfg::kScanEndFallback - cfg::kScanStartFallback });
+            return true;
         }
 
-        HANDLE system_token = nullptr;
-        err = duplicate_winlogon_token(session_id, TOKEN_IMPERSONATE, &system_token);
-        if (err == ERROR_SUCCESS)
+        IMAGE_NT_HEADERS64 nt{};
+        if (!mem.read_raw(module_base + static_cast<uintptr_t>(dos.e_lfanew), &nt, sizeof(nt)) ||
+            nt.Signature != IMAGE_NT_SIGNATURE)
         {
-            if (SetThreadToken(nullptr, system_token))
+            sections.push_back({ cfg::kScanStartFallback, cfg::kScanEndFallback - cfg::kScanStartFallback });
+            return true;
+        }
+
+        const uintptr_t section_table = module_base + static_cast<uintptr_t>(dos.e_lfanew) +
+            FIELD_OFFSET(IMAGE_NT_HEADERS64, OptionalHeader) + nt.FileHeader.SizeOfOptionalHeader;
+
+        for (WORD i = 0; i < nt.FileHeader.NumberOfSections; ++i)
+        {
+            IMAGE_SECTION_HEADER sh{};
+            if (!mem.read_raw(section_table + i * sizeof(IMAGE_SECTION_HEADER), &sh, sizeof(sh))) break;
+            if (!(sh.Characteristics & IMAGE_SCN_MEM_WRITE)) continue;
+
+            size_t size = sh.Misc.VirtualSize ? sh.Misc.VirtualSize : sh.SizeOfRawData;
+            if (!size) continue;
+            if (size > cfg::kMaxScanSectionBytes) size = cfg::kMaxScanSectionBytes;
+
+            sections.push_back({ module_base + sh.VirtualAddress, size });
+        }
+
+        if (sections.empty())
+            sections.push_back({ cfg::kScanStartFallback, cfg::kScanEndFallback - cfg::kScanStartFallback });
+
+        size_t total = 0;
+        for (const auto& s : sections) total += s.size;
+        printf("[*] UWorld scan prepared: %zu writable section(s), %.1f MiB total\n",
+               sections.size(), static_cast<double>(total) / (1024.0 * 1024.0));
+        return true;
+    }
+
+    // One bounded step: up to cfg::kScanChunksPerStep chunks, then yields.
+    // Returns 0 when nothing was found (yet, or ever — check `exhausted`).
+    inline uintptr_t step(uintptr_t module_base)
+    {
+        if (!mem.alive()) return 0;
+
+        if (!prepared && !prepare(module_base)) return 0;
+        if (exhausted) return 0;
+
+        const ULONGLONG now = now_ms();
+        if (now < next_step_ms) return 0;
+        next_step_ms = now + cfg::kScanRetryMs;
+
+        static uint8_t buffer[0x20000];
+
+        for (int chunk = 0; chunk < cfg::kScanChunksPerStep; ++chunk)
+        {
+            while (index < sections.size())
             {
-                if (!DuplicateTokenEx(self_token,
-                                      TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT,
-                                      nullptr, SecurityAnonymous, TokenPrimary, out_token))
-                    err = GetLastError();
-                else
+                const ScanSection& sec = sections[index];
+                const uintptr_t end = sec.start + sec.size;
+
+                if (cursor < sec.start) cursor = sec.start;
+                if (cursor >= end)
                 {
-                    BOOL ui_access = TRUE;
-                    if (!SetTokenInformation(*out_token, TokenUIAccess, &ui_access, sizeof(ui_access)))
+                    ++index;
+                    cursor = 0;
+                    continue;
+                }
+
+                size_t want = static_cast<size_t>(end - cursor);
+                if (want > cfg::kScanChunkBytes) want = cfg::kScanChunkBytes;
+                if (want > sizeof(buffer)) want = sizeof(buffer);
+
+                // A failed read skips just that range (unmapped page), it does
+                // not abort the step and it is never treated as data. One retry
+                // at 4 KiB granularity so a single bad page cannot hide a hit.
+                size_t scanned = 0;
+                while (scanned < want)
+                {
+                    const uintptr_t at = cursor + scanned;
+                    size_t len = want - scanned;
+                    if (len > 0x1000) len = 0x1000;
+
+                    if (mem.read_raw(at, buffer, len))
                     {
-                        err = GetLastError();
-                        CloseHandle(*out_token);
+                        for (size_t offset = 0; offset + sizeof(uintptr_t) <= len; offset += sizeof(uintptr_t))
+                        {
+                            uintptr_t value = 0;
+                            memcpy(&value, buffer + offset, sizeof(value));
+                            if (!Mem::plausible_ptr(value)) continue;
+
+                            if (looks_like_uworld(value))
+                            {
+                                const uintptr_t hit = at + offset;
+                                printf("[*] UWorld resolved by scan: base+0x%llX -> 0x%llX\n",
+                                       static_cast<unsigned long long>(hit - module_base),
+                                       static_cast<unsigned long long>(value));
+                                return value;
+                            }
+                        }
                     }
+                    scanned += len;
                 }
-                RevertToSelf();
+
+                cursor += want;
+                break;      // next chunk
             }
-            else err = GetLastError();
-            CloseHandle(system_token);
+
+            if (index >= sections.size())
+            {
+                exhausted = true;
+                printf("[!] UWorld scan finished with no hit. Use --uworld 0x... (see README)\n");
+                return 0;
+            }
         }
-        CloseHandle(self_token);
-        return err;
+
+        return 0;
+    }
+}
+
+inline uintptr_t resolve_uworld()
+{
+    if (!mem.alive()) return 0;
+
+    // 1 + 2: a validated offset, if we have one
+    if (off::UWorld)
+    {
+        uintptr_t world = 0;
+        if (mem.read(mem.base + off::UWorld, world) && looks_like_uworld(world))
+            return world;
+    }
+    if (cfg::kUWorldOverride)
+    {
+        uintptr_t world = 0;
+        if (mem.read(mem.base + cfg::kUWorldOverride, world) && looks_like_uworld(world))
+            return world;
     }
 
-    inline BOOL check_for_ui_access(bool* ui_access)
+    // 3: bounded scan
+    if (cfg::kAutoResolveUWorld)
+        return scanner::step(mem.base);
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+//  overlay window (topmost, click-through unless the menu is open)
+// ---------------------------------------------------------------------------
+namespace overlay
+{
+    inline IDirect3D9Ex*       d3d = nullptr;
+    inline IDirect3DDevice9Ex* device = nullptr;
+    inline D3DPRESENT_PARAMETERS params{};
+    inline HWND hwnd = nullptr;
+    inline HWND game_wnd = nullptr;
+    inline bool running = true;
+    inline bool device_ok = false;
+
+    inline LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     {
-        HANDLE token = nullptr;
-        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return FALSE;
-
-        DWORD value = 0, retlen = 0;
-        BOOL result = GetTokenInformation(token, TokenUIAccess, &value, sizeof(value), &retlen);
-        *ui_access = value != 0;
-        CloseHandle(token);
-        return result;
-    }
-
-    // Re-launches the process with a UIAccess primary token. Requires the binary
-    // to be signed and sitting in a trusted location (Program Files), otherwise
-    // CreateProcessAsUser fails and we fall back to a normal overlay window.
-    inline DWORD prepare_for_ui_access()
-    {
-        bool ui_access = false;
-        if (!check_for_ui_access(&ui_access)) return GetLastError();
-        if (ui_access) return ERROR_SUCCESS;
-
-        HANDLE token = nullptr;
-        DWORD err = create_ui_access_token(&token);
-        if (err != ERROR_SUCCESS) return err;
-
-        STARTUPINFOW si{};
-        PROCESS_INFORMATION pi{};
-        GetStartupInfoW(&si);
-        if (CreateProcessAsUserW(token, nullptr, GetCommandLineW(), nullptr, nullptr, FALSE, 0,
-                                 nullptr, nullptr, &si, &pi))
+        switch (msg)
         {
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-            ExitProcess(0);
+        case WM_ERASEBKGND: return 1;
+        case WM_DESTROY:    PostQuitMessage(0); return 0;
+        default:            return DefWindowProcA(h, msg, wp, lp);
         }
-        err = GetLastError();
-        CloseHandle(token);
-        return err;
     }
 
-    inline bool init()
+    inline int click_through_applied = -1;       // -1 = unknown, re-applied per window
+
+    inline void set_click_through(bool click_through)
     {
-        if (cfg::kTryUiAccessBand)
+        if (!hwnd) return;
+
+        const int want = click_through ? 1 : 0;
+        if (click_through_applied == want) return;
+        click_through_applied = want;
+
+        LONG_PTR ex = GetWindowLongPtrA(hwnd, GWL_EXSTYLE);
+        ex |= WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE;
+        if (click_through) ex |= WS_EX_TRANSPARENT;
+        else               ex &= ~static_cast<LONG_PTR>(WS_EX_TRANSPARENT);
+
+        SetWindowLongPtrA(hwnd, GWL_EXSTYLE, ex);
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+
+    inline bool create_window()
+    {
+        WNDCLASSEXA wc{};
+        wc.cbSize        = sizeof(wc);
+        wc.style         = CS_VREDRAW | CS_HREDRAW;
+        wc.lpfnWndProc   = wnd_proc;
+        wc.hInstance     = GetModuleHandleA(nullptr);
+        wc.hIcon         = LoadIcon(nullptr, IDI_APPLICATION);
+        wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
+        wc.lpszClassName = "overlay_class";
+
+        if (!RegisterClassExA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         {
-            const DWORD err = prepare_for_ui_access();
-            if (err != ERROR_SUCCESS)
-                printf("[!] UIAccess unavailable (%lu), using plain topmost overlay\n", err);
+            printf("[!] RegisterClassExA failed (%lu)\n", GetLastError());
+            return false;
         }
 
-        create_window_in_band = reinterpret_cast<fn_create_window_in_band>(
-            GetProcAddress(librarys::user32, "CreateWindowInBand"));
-        if (!create_window_in_band)
-            create_window_in_band = reinterpret_cast<fn_create_window_in_band>(
-                GetProcAddress(librarys::win32u, "CreateWindowInBand"));
-        return true;  // band is optional; create_overlay falls back
+        hwnd = CreateWindowExA(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE |
+                               (settings::show_menu ? 0 : WS_EX_TRANSPARENT),
+                               wc.lpszClassName, "overlay", WS_POPUP,
+                               0, 0, settings::width, settings::height,
+                               nullptr, nullptr, wc.hInstance, nullptr);
+        if (!hwnd)
+        {
+            printf("[!] CreateWindowExA failed (%lu)\n", GetLastError());
+            return false;
+        }
+
+        // Per-pixel alpha comes from the DWM-composited frame (the A channel of the
+        // backbuffer). If that is unavailable, fall back to a black colour key so
+        // the window is still see-through rather than an opaque black rectangle.
+        MARGINS margins = { -1, -1, -1, -1 };
+        const HRESULT hr = DwmExtendFrameIntoClientArea(hwnd, &margins);
+        if (FAILED(hr))
+        {
+            printf("[!] DwmExtendFrameIntoClientArea failed (0x%08lX), using colour key\n",
+                   static_cast<unsigned long>(hr));
+            if (!SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY))
+                printf("[!] SetLayeredWindowAttributes(COLORKEY) failed (%lu)\n", GetLastError());
+        }
+        else if (!SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA))
+        {
+            printf("[!] SetLayeredWindowAttributes(ALPHA) failed (%lu)\n", GetLastError());
+        }
+
+        click_through_applied = -1;
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        UpdateWindow(hwnd);
+        return true;
+    }
+
+    inline void destroy_window()
+    {
+        if (hwnd)
+        {
+            DestroyWindow(hwnd);
+            hwnd = nullptr;
+        }
+        click_through_applied = -1;
+    }
+
+    inline bool init_device()
+    {
+        HRESULT hr = Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d);
+        if (FAILED(hr) || !d3d)
+        {
+            printf("[!] Direct3DCreate9Ex failed (0x%08lX)\n", static_cast<unsigned long>(hr));
+            d3d = nullptr;
+            return false;
+        }
+
+        ZeroMemory(&params, sizeof(params));
+        params.Windowed               = TRUE;
+        params.SwapEffect             = D3DSWAPEFFECT_DISCARD;
+        params.hDeviceWindow          = hwnd;
+        params.MultiSampleType        = D3DMULTISAMPLE_NONE;
+        params.BackBufferFormat       = D3DFMT_A8R8G8B8;
+        params.BackBufferWidth        = static_cast<UINT>(settings::width);
+        params.BackBufferHeight       = static_cast<UINT>(settings::height);
+        params.EnableAutoDepthStencil = FALSE;
+        params.PresentationInterval    = D3DPRESENT_INTERVAL_IMMEDIATE;
+
+        hr = d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
+                                 D3DCREATE_HARDWARE_VERTEXPROCESSING,
+                                 &params, nullptr, &device);
+        if (FAILED(hr))
+        {
+            printf("[!] CreateDeviceEx(HAL) failed (0x%08lX), retrying software vertex processing\n",
+                   static_cast<unsigned long>(hr));
+            hr = d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
+                                     D3DCREATE_SOFTWARE_VERTEXPROCESSING,
+                                     &params, nullptr, &device);
+        }
+        if (FAILED(hr) || !device)
+        {
+            printf("[!] CreateDeviceEx failed (0x%08lX)\n", static_cast<unsigned long>(hr));
+            device = nullptr;
+            if (d3d) { d3d->Release(); d3d = nullptr; }
+            return false;
+        }
+
+        device_ok = true;
+        return true;
+    }
+
+    inline void release_font();
+
+    inline void destroy_device()
+    {
+        release_font();
+        if (device) { device->Release(); device = nullptr; }
+        if (d3d)    { d3d->Release(); d3d = nullptr; }
+        device_ok = false;
+    }
+
+    inline HWND find_process_window(DWORD pid)
+    {
+        struct Ctx { HWND hwnd; DWORD pid; } ctx{ nullptr, pid };
+
+        EnumWindows([](HWND h, LPARAM lp) -> BOOL {
+            auto* c = reinterpret_cast<Ctx*>(lp);
+            DWORD owner = 0;
+            GetWindowThreadProcessId(h, &owner);
+            if (owner == c->pid && IsWindowVisible(h) && GetWindow(h, GW_OWNER) == nullptr)
+            {
+                c->hwnd = h;
+                return FALSE;
+            }
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&ctx));
+
+        return ctx.hwnd;
     }
 }
 
 // ---------------------------------------------------------------------------
-//  glyph atlas + immediate-mode draw list (replaces imgui)
+//  glyph atlas + immediate-mode draw list
 // ---------------------------------------------------------------------------
 namespace draw
 {
@@ -1377,8 +1095,8 @@ namespace draw
 
     constexpr DWORD kFvf = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 
-    inline std::vector<Vertex> flat_verts;  // untextured quads
-    inline std::vector<Vertex> text_verts;  // atlas quads
+    inline std::vector<Vertex> flat_verts;
+    inline std::vector<Vertex> text_verts;
     inline Font font;
 
     // GDI glyph atlas: draw ASCII into a DIB section, upload coverage as alpha.
@@ -1395,7 +1113,10 @@ namespace draw
         bool begin(int px, const char* face)
         {
             screen_dc = GetDC(nullptr);
+            if (!screen_dc) return false;
+
             dc = CreateCompatibleDC(screen_dc);
+            if (!dc) return false;
 
             BITMAPINFO bmi{};
             bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
@@ -1414,13 +1135,14 @@ namespace draw
             hfont = CreateFontA(px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                 OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
                                 DEFAULT_PITCH | FF_DONTCARE, face);
+            if (!hfont) return false;
             SelectObject(dc, reinterpret_cast<HGDIOBJ>(hfont));
 
             SetBkMode(dc, TRANSPARENT);
             SetTextColor(dc, RGB(255, 255, 255));
 
             TEXTMETRICA tm{};
-            GetTextMetricsA(dc, &tm);
+            if (!GetTextMetricsA(dc, &tm)) return false;
             cell_h = tm.tmHeight + 2;
             return true;
         }
@@ -1435,26 +1157,41 @@ namespace draw
             }
             if (dib)
             {
-                if (old_bitmap) SelectObject(dc, old_bitmap);
+                if (dc && old_bitmap) SelectObject(dc, old_bitmap);
                 DeleteObject(reinterpret_cast<HGDIOBJ>(dib));
                 dib = nullptr;
             }
             if (dc) { DeleteDC(dc); dc = nullptr; }
             if (screen_dc) { ReleaseDC(nullptr, screen_dc); screen_dc = nullptr; }
             bits = nullptr;
+            old_bitmap = nullptr;
         }
+
+        ~FontBuilder() { end(); }
     };
 
-    inline bool create_font(IDirect3DDevice9* device, Font& f, int px, const char* face)
+    // D3DPOOL_DEFAULT + D3DUSAGE_DYNAMIC, so the texture has to be released
+    // before Reset and recreated after — overlay::handle_reset does that.
+    inline bool create_font(IDirect3DDevice9* dev, Font& f, int px, const char* face)
     {
-        f.tex = nullptr;
+        if (!dev) return false;
+
+        if (f.tex) { f.tex->Release(); f.tex = nullptr; }
+        ZeroMemory(f.glyphs, sizeof(f.glyphs));
+        f.line_h = 0;
 
         FontBuilder builder;
-        if (!builder.begin(px, face)) { builder.end(); return false; }
+        if (!builder.begin(px, face))
+        {
+            builder.end();
+            printf("[!] font atlas: GDI setup failed\n");
+            return false;
+        }
 
         f.line_h = static_cast<float>(builder.cell_h);
 
         int pen_x = 1, pen_y = 1;
+        int drawn = 0;
         for (int c = 32; c < 128; ++c)
         {
             const char ch = static_cast<char>(c);
@@ -1466,6 +1203,7 @@ namespace draw
             if (pen_y + builder.cell_h + 1 >= atlas::kHeight) break;
 
             TextOutA(builder.dc, pen_x, pen_y, &ch, 1);
+            ++drawn;
 
             Glyph& g = f.glyphs[c - 32];
             g.adv = static_cast<float>(adv);
@@ -1479,36 +1217,54 @@ namespace draw
             pen_x += adv + 1;
         }
 
-        if (FAILED(device->CreateTexture(atlas::kWidth, atlas::kHeight, 1, D3DUSAGE_DYNAMIC,
-                                         D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &f.tex, nullptr)))
+        if (drawn < 90)
         {
             builder.end();
+            printf("[!] font atlas: only %d/96 glyphs fit at %dpx\n", drawn, px);
+            return false;
+        }
+
+        HRESULT hr = dev->CreateTexture(atlas::kWidth, atlas::kHeight, 1, D3DUSAGE_DYNAMIC,
+                                        D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &f.tex, nullptr);
+        if (FAILED(hr) || !f.tex)
+        {
+            f.tex = nullptr;
+            builder.end();
+            printf("[!] font texture creation failed (0x%08lX)\n", static_cast<unsigned long>(hr));
             return false;
         }
 
         D3DLOCKED_RECT locked{};
-        if (FAILED(f.tex->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD)))
+        hr = f.tex->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD);
+        if (FAILED(hr) || !locked.pBits)
         {
             builder.end();
+            f.tex->Release();
+            f.tex = nullptr;
+            printf("[!] font texture lock failed (0x%08lX)\n", static_cast<unsigned long>(hr));
             return false;
         }
 
         const BYTE* src = static_cast<const BYTE*>(builder.bits);
-        for (int y = 0; y < atlas::kHeight; ++y)
+        if (src)
         {
-            DWORD* dst_row = reinterpret_cast<DWORD*>(static_cast<BYTE*>(locked.pBits) + y * locked.Pitch);
-            const DWORD* src_row = reinterpret_cast<const DWORD*>(src + static_cast<size_t>(y) * atlas::kWidth * 4);
-            for (int x = 0; x < atlas::kWidth; ++x)
+            for (int y = 0; y < atlas::kHeight; ++y)
             {
-                const DWORD px32 = src_row[x];
-                const DWORD r = (px32 >> 16) & 0xFF;
-                const DWORD g = (px32 >> 8) & 0xFF;
-                const DWORD b = px32 & 0xFF;
-                DWORD a = r > g ? r : g;
-                if (b > a) a = b;
-                dst_row[x] = (a << 24) | 0x00FFFFFF;   // white RGB, coverage in alpha
+                DWORD* dst_row = reinterpret_cast<DWORD*>(static_cast<BYTE*>(locked.pBits) + y * locked.Pitch);
+                const DWORD* src_row = reinterpret_cast<const DWORD*>(src + static_cast<size_t>(y) * atlas::kWidth * 4);
+                for (int x = 0; x < atlas::kWidth; ++x)
+                {
+                    const DWORD px32 = src_row[x];
+                    const DWORD r = (px32 >> 16) & 0xFF;
+                    const DWORD g = (px32 >> 8) & 0xFF;
+                    const DWORD b = px32 & 0xFF;
+                    DWORD a = r > g ? r : g;
+                    if (b > a) a = b;
+                    dst_row[x] = (a << 24) | 0x00FFFFFF;   // white RGB, coverage in alpha
+                }
             }
         }
+
         f.tex->UnlockRect(0);
         builder.end();
         return true;
@@ -1539,7 +1295,7 @@ namespace draw
     inline void line(float x0, float y0, float x1, float y1, DWORD color, float thickness = 1.f)
     {
         float dx = x1 - x0, dy = y1 - y0;
-        const float len = sqrtf(dx * dx + dy * dy);
+        const float len = std::sqrt(dx * dx + dy * dy);
         if (len < 0.001f) return;
 
         dx /= len; dy /= len;
@@ -1577,12 +1333,13 @@ namespace draw
 
     inline void circle(float cx, float cy, float radius, DWORD color, int segments = 96)
     {
+        if (radius <= 0.f || segments < 3) return;
         float px = cx + radius, py = cy;
         for (int i = 1; i <= segments; ++i)
         {
             const float a = (static_cast<float>(i) / segments) * 6.28318530718f;
-            const float nx = cx + cosf(a) * radius;
-            const float ny = cy + sinf(a) * radius;
+            const float nx = cx + std::cos(a) * radius;
+            const float ny = cy + std::sin(a) * radius;
             line(px, py, nx, ny, color, 1.f);
             px = nx; py = ny;
         }
@@ -1610,12 +1367,12 @@ namespace draw
             if (idx < 0 || idx > 95) continue;
             const Glyph& g = font.glyphs[idx];
 
-            if (*p != ' ')
+            if (*p != ' ' && g.w > 0.f)
             {
-                const Vertex a{ pen,        y,            0, 1, color, g.u0, g.v0 };
-                const Vertex b{ pen + g.w,  y,            0, 1, color, g.u1, g.v0 };
-                const Vertex c{ pen + g.w,  y + g.h,      0, 1, color, g.u1, g.v1 };
-                const Vertex d{ pen,        y + g.h,      0, 1, color, g.u0, g.v1 };
+                const Vertex a{ pen,       y,          0, 1, color, g.u0, g.v0 };
+                const Vertex b{ pen + g.w, y,          0, 1, color, g.u1, g.v0 };
+                const Vertex c{ pen + g.w, y + g.h,    0, 1, color, g.u1, g.v1 };
+                const Vertex d{ pen,       y + g.h,    0, 1, color, g.u0, g.v1 };
                 text_verts.push_back(a); text_verts.push_back(b); text_verts.push_back(c);
                 text_verts.push_back(a); text_verts.push_back(c); text_verts.push_back(d);
             }
@@ -1628,49 +1385,51 @@ namespace draw
         text(cx - text_width(str) * 0.5f, y, color, str);
     }
 
-    inline void flush(IDirect3DDevice9* device)
+    inline void flush(IDirect3DDevice9* dev)
     {
-        device->SetFVF(kFvf);
-        device->SetRenderState(D3DRS_ZENABLE, FALSE);
-        device->SetRenderState(D3DRS_LIGHTING, FALSE);
-        device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-        device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
-        device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-        device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+        if (!dev) return;
+
+        dev->SetFVF(kFvf);
+        dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+        dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+        dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+        dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+        dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
 
         if (!flat_verts.empty())
         {
-            device->SetTexture(0, nullptr);
-            device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
-            device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-            device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
-            device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
-            device->DrawPrimitiveUP(D3DPT_TRIANGLELIST,
-                                    static_cast<UINT>(flat_verts.size() / 3),
-                                    flat_verts.data(), sizeof(Vertex));
+            dev->SetTexture(0, nullptr);
+            dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
+            dev->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+            dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
+            dev->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+            dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST,
+                                 static_cast<UINT>(flat_verts.size() / 3),
+                                 flat_verts.data(), sizeof(Vertex));
         }
 
         if (!text_verts.empty() && font.tex)
         {
-            device->SetTexture(0, font.tex);
-            device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-            device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-            device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
-            device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-            device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-            device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
-            device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
-            device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
-            device->DrawPrimitiveUP(D3DPT_TRIANGLELIST,
-                                    static_cast<UINT>(text_verts.size() / 3),
-                                    text_verts.data(), sizeof(Vertex));
-            device->SetTexture(0, nullptr);
+            dev->SetTexture(0, font.tex);
+            dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+            dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+            dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+            dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+            dev->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+            dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+            dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+            dev->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+            dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST,
+                                 static_cast<UINT>(text_verts.size() / 3),
+                                 text_verts.data(), sizeof(Vertex));
+            dev->SetTexture(0, nullptr);
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-//  tiny immediate-mode UI (replaces imgui menu)
+//  tiny immediate-mode UI
 // ---------------------------------------------------------------------------
 namespace ui
 {
@@ -1734,7 +1493,10 @@ namespace ui
         draw::text(x, y, kColTextDim, label);
         draw::rect_filled(x, ty, w, track_h, kColFrame);
 
-        const float frac = (*value - lo) / (hi - lo);
+        float frac = (*value - lo) / (hi - lo);
+        if (frac < 0.f) frac = 0.f;
+        if (frac > 1.f) frac = 1.f;
+
         draw::rect_filled(x, ty, w * frac, track_h, kColAccent);
         draw::rect_filled(x + w * frac - 4.f, ty - 4.f, 8.f, track_h + 8.f, kColAccent);
 
@@ -1766,135 +1528,437 @@ namespace ui
 }
 
 // ---------------------------------------------------------------------------
-//  overlay + device (um/game.hpp)
+//  config IO — flat JSON, no dependencies. Written next to the exe.
 // ---------------------------------------------------------------------------
-namespace overlay
+namespace config
 {
-    inline IDirect3D9Ex*       d3d = nullptr;
-    inline IDirect3DDevice9Ex* device = nullptr;
-    inline D3DPRESENT_PARAMETERS params{};
-    inline HWND hwnd = nullptr;
-    inline HWND game_wnd = nullptr;
-    inline bool running = true;
-
-    inline void create_window()
+    inline bool save()
     {
-        WNDCLASSEXA wc{};
-        wc.cbSize = sizeof(wc);
-        wc.style = CS_VREDRAW | CS_HREDRAW;
-        wc.lpfnWndProc = DefWindowProcA;
-        wc.hInstance = GetModuleHandleA(nullptr);
-        wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
-        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-        wc.lpszClassName = "overlay_class";
+        FILE* f = nullptr;
+        if (fopen_s(&f, cfg::kConfigPath, "wb") != 0 || !f) return false;
 
-        const ATOM atom = RegisterClassExA(&wc);
-        const int sw = settings::width;
-        const int sh = settings::height;
+        fprintf(f, "{\n");
+        fprintf(f, "  \"aimbot\": { \"enable\": %s, \"show_fov\": %s, \"fov\": %.1f, \"smoothness\": %.2f, \"aim_key\": %d },\n",
+                settings::aimbot::enable ? "true" : "false",
+                settings::aimbot::show_fov ? "true" : "false",
+                settings::aimbot::fov, settings::aimbot::smoothness, settings::aimbot::aim_key);
+        fprintf(f, "  \"visuals\": { \"enable\": %s, \"box\": %s, \"fill_box\": %s, \"line\": %s, \"distance\": %s, \"health_bar\": %s }\n",
+                settings::visuals::enable ? "true" : "false",
+                settings::visuals::box ? "true" : "false",
+                settings::visuals::fill_box ? "true" : "false",
+                settings::visuals::line ? "true" : "false",
+                settings::visuals::distance ? "true" : "false",
+                settings::visuals::health_bar ? "true" : "false");
+        fprintf(f, "}\n");
 
-        // click-through is dropped while the menu is open, restored when it closes
-        DWORD ex_style = WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW;
-        if (!settings::show_menu) ex_style |= WS_EX_TRANSPARENT;
-
-        if (gui::create_window_in_band)
-            hwnd = gui::create_window_in_band(ex_style, atom, L"overlay", WS_POPUP, 0, 0, sw, sh,
-                                              nullptr, nullptr, wc.hInstance, nullptr, gui::ZBID_UIACCESS);
-
-        if (!hwnd)
-            hwnd = CreateWindowExA(ex_style, wc.lpszClassName, "overlay", WS_POPUP, 0, 0, sw, sh,
-                                   nullptr, nullptr, wc.hInstance, nullptr);
-
-        if (!hwnd) return;
-
-        SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 255, LWA_ALPHA);
-
-        MARGINS margins = { -1, -1, -1, -1 };
-        DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-        ShowWindow(hwnd, SW_SHOW);
-        UpdateWindow(hwnd);
-    }
-
-    inline bool init_device()
-    {
-        if (FAILED(Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d))) return false;
-
-        ZeroMemory(&params, sizeof(params));
-        params.Windowed = TRUE;
-        params.SwapEffect = D3DSWAPEFFECT_DISCARD;
-        params.hDeviceWindow = hwnd;
-        params.MultiSampleType = D3DMULTISAMPLE_NONE;
-        params.BackBufferFormat = D3DFMT_A8R8G8B8;
-        params.BackBufferWidth = settings::width;
-        params.BackBufferHeight = settings::height;
-        params.EnableAutoDepthStencil = FALSE;
-        params.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
-
-        if (FAILED(d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
-                                       D3DCREATE_HARDWARE_VERTEXPROCESSING,
-                                       &params, nullptr, &device)))
-        {
-            d3d->Release();
-            d3d = nullptr;
-            return false;
-        }
+        fclose(f);
         return true;
     }
 
-    inline void release_font()
+    inline bool load()
     {
-        if (draw::font.tex) { draw::font.tex->Release(); draw::font.tex = nullptr; }
-    }
+        FILE* f = nullptr;
+        if (fopen_s(&f, cfg::kConfigPath, "rb") != 0 || !f) return false;
 
-    inline void on_device_lost()
-    {
-        release_font();
-        while (device->TestCooperativeLevel() == D3DERR_DEVICELOST) Sleep(50);
-        device->Reset(&params);
-        draw::create_font(device, draw::font, cfg::kFontPx, "Consolas");
-    }
+        char buffer[4096] = { 0 };
+        const size_t got = fread(buffer, 1, sizeof(buffer) - 1, f);
+        fclose(f);
+        if (got == 0) return false;
 
-    inline HWND find_process_window(DWORD pid)
-    {
-        struct Ctx { HWND hwnd; DWORD pid; } ctx{ nullptr, pid };
-        EnumWindows([](HWND h, LPARAM lp) -> BOOL {
-            auto* c = reinterpret_cast<Ctx*>(lp);
-            DWORD owner = 0;
-            GetWindowThreadProcessId(h, &owner);
-            if (owner == c->pid && IsWindowVisible(h))
-            {
-                c->hwnd = h;
-                return FALSE;
-            }
-            return TRUE;
-        }, reinterpret_cast<LPARAM>(&ctx));
-        return ctx.hwnd;
+        // flat scan helpers: find `key` after `from`, then read the value after ':'
+        auto value_at = [](const char* from, const char* key) -> const char* {
+            if (!from) return nullptr;
+            const char* at = strstr(from, key);
+            if (!at) return nullptr;
+            at = strchr(at, ':');
+            if (!at) return nullptr;
+            ++at;
+            while (*at == ' ' || *at == '\t') ++at;
+            return at;
+        };
+
+        auto read_bool = [&](const char* from, const char* key, bool* out) {
+            const char* at = value_at(from, key);
+            if (!at) return;
+            if (strncmp(at, "true", 4) == 0) *out = true;
+            else if (strncmp(at, "false", 5) == 0) *out = false;
+        };
+
+        auto read_float = [&](const char* from, const char* key, double lo, double hi, float* out) {
+            const char* at = value_at(from, key);
+            if (!at) return;
+            double v = 0.0;
+            if (sscanf_s(at, "%lf", &v) != 1) return;
+            if (!std::isfinite(v) || v < lo || v > hi) return;   // never load garbage
+            *out = static_cast<float>(v);
+        };
+
+        auto read_int = [&](const char* from, const char* key, int lo, int hi, int* out) {
+            const char* at = value_at(from, key);
+            if (!at) return;
+            int v = 0;
+            if (sscanf_s(at, "%d", &v) != 1) return;
+            if (v < lo || v > hi) return;
+            *out = v;
+        };
+
+        const char* aimbot = strstr(buffer, "\"aimbot\"");
+        if (aimbot)
+        {
+            read_bool(aimbot, "\"enable\"", &settings::aimbot::enable);
+            read_bool(aimbot, "\"show_fov\"", &settings::aimbot::show_fov);
+            read_float(aimbot, "\"fov\"", 10.0, 400.0, &settings::aimbot::fov);
+            read_float(aimbot, "\"smoothness\"", 1.0, 15.0, &settings::aimbot::smoothness);
+            read_int(aimbot, "\"aim_key\"", VK_LBUTTON, VK_RBUTTON, &settings::aimbot::aim_key);
+        }
+
+        const char* visuals = strstr(buffer, "\"visuals\"");
+        if (visuals)
+        {
+            read_bool(visuals, "\"enable\"", &settings::visuals::enable);
+            read_bool(visuals, "\"box\"", &settings::visuals::box);
+            read_bool(visuals, "\"fill_box\"", &settings::visuals::fill_box);
+            read_bool(visuals, "\"line\"", &settings::visuals::line);
+            read_bool(visuals, "\"distance\"", &settings::visuals::distance);
+            read_bool(visuals, "\"health_bar\"", &settings::visuals::health_bar);
+        }
+
+        return true;
     }
 }
 
 // ---------------------------------------------------------------------------
-//  game logic (um/game.hpp)
+//  game logic
 // ---------------------------------------------------------------------------
-inline void aimbot(uintptr_t target_mesh)
+inline bool game_foreground()
 {
-    if (!target_mesh) return;
-    if (cfg::kVisibleOnly && !is_visible(target_mesh)) return;
+    if (!mem.alive()) return false;
 
-    const Vector3 head3d = bone_world_location(target_mesh, cfg::kHeadBone);
-    if (!valid_vector(head3d)) return;
+    const HWND fg = GetForegroundWindow();
+    if (!fg) return false;
 
-    const Vector2 head2d = project_world_to_screen(head3d);
-    if (head2d.x == 0 && head2d.y == 0) return;
+    DWORD owner = 0;
+    GetWindowThreadProcessId(fg, &owner);
+    if (owner == mem.pid) return true;
 
-    // gain = 1/smoothness, then the per-tick step is capped so a target that
-    // teleports across the screen never produces a 300px mouse jump.
+    // the game sometimes owns a wrapping window; fall back to the cached one
+    if (!overlay::game_wnd || !IsWindow(overlay::game_wnd))
+        overlay::game_wnd = overlay::find_process_window(mem.pid);
+
+    return overlay::game_wnd && fg == overlay::game_wnd;
+}
+
+// Aim point off the capsule: centre + (BaseEyeHeight - CapsuleHalfHeight) on Z.
+// Both fields are validated; if either is implausible we fall back to the centre
+// (which is still a real, validated position) instead of inventing a height.
+inline bool pawn_aim_point(uintptr_t pawn, uintptr_t root, const Vector3& centre, Vector3& out)
+{
+    out = centre;
+
+    if (cfg::kBoneWorldLocations)
+    {
+        uintptr_t mesh = 0;
+        if (mem.read(pawn + off::Mesh, mesh) && Mem::plausible_ptr(mesh))
+        {
+            if (bone_world_location(mesh, cfg::kHeadBone, out)) return true;
+        }
+    }
+
+    float eye_height = 0.f;
+    float capsule_half = 0.f;
+
+    const bool have_eye = mem.read(pawn + off::BaseEyeHeight, eye_height) &&
+                          std::isfinite(eye_height) && eye_height > 0.f && eye_height < 500.f;
+    const bool have_capsule = mem.read(pawn + off::CapsuleHalfHeight, capsule_half) &&
+                              std::isfinite(capsule_half) && capsule_half > 1.f && capsule_half < 500.f;
+
+    if (have_eye)
+    {
+        const double half = have_capsule ? static_cast<double>(capsule_half)
+                                         : static_cast<double>(cfg::kCapsuleHalfHeightFallback);
+        out = Vector3(centre.x, centre.y, centre.z + (static_cast<double>(eye_height) - half));
+        return valid_vector(out);
+    }
+
+    (void)root;
+    return valid_vector(out);
+}
+
+// Single pass over GameState->PlayerArray. Clears the previous target first, so a
+// tick that returns early can never leave a stale mesh behind for the aimbot.
+inline void game_tick()
+{
+    cache::closest_mesh = 0;
+    cache::closest_pawn = 0;
+    cache::closest_distance = DBL_MAX;
+
+    cache::camera = Camera{};
+
+    if (!mem.alive()) return;
+
+    // re-validate the world pointer at a bounded rate instead of every tick
+    const ULONGLONG now = GetTickCount64();
+    if (looks_like_uworld(cache::uworld))
+    {
+        cache::uworld_ready = true;
+    }
+    else
+    {
+        cache::uworld = 0;
+        cache::uworld_ready = false;
+        if (now - cache::last_resolve_ms < static_cast<ULONGLONG>(cfg::kResolveRetryMs)) return;
+        cache::last_resolve_ms = now;
+
+        cache::uworld = resolve_uworld();
+        if (!cache::uworld) return;
+        cache::uworld_ready = true;
+    }
+
+    if (!mem.read(cache::uworld + off::GameInstance, cache::game_instance)) return;
+    if (!Mem::plausible_ptr(cache::game_instance)) return;
+
+    // UGameInstance::LocalPlayers is a TArray<ULocalPlayer*> { Data, Num, Max }
+    uintptr_t local_players = 0;
+    if (!mem.read(cache::game_instance + off::LocalPlayers, local_players)) return;
+    if (!Mem::plausible_ptr(local_players)) return;
+
+    cache::local_players = 0;
+    if (!mem.read(local_players, cache::local_players)) return;
+    if (!Mem::plausible_ptr(cache::local_players)) return;
+
+    // ULocalPlayer::PlayerController is not in this dump; 0x30 is the long-standing
+    // offset and is validation-gated below (camera + pawn must resolve through it).
+    // FILL: print ULocalPlayer+0x00..0x80 with a known controller and confirm; the
+    //       walk fails safe if it is wrong.
+    constexpr uintptr_t kLocalPlayerController = 0x30;
+
+    cache::player_controller = 0;
+    if (!mem.read(cache::local_players + kLocalPlayerController, cache::player_controller)) return;
+    if (!Mem::plausible_ptr(cache::player_controller)) return;
+
+    cache::local_pawn = 0;
+    if (!mem.read(cache::player_controller + off::LocalPawn, cache::local_pawn)) cache::local_pawn = 0;
+    if (cache::local_pawn && !Mem::plausible_ptr(cache::local_pawn)) cache::local_pawn = 0;
+
+    cache::my_team_valid = false;
+    if (cache::local_pawn)
+    {
+        uintptr_t root = 0;
+        if (mem.read(cache::local_pawn + off::RootComponent, root) && Mem::plausible_ptr(root))
+            component_world_location(root, cache::local_origin);   // validated inside
+
+        uintptr_t player_state = 0;
+        if (mem.read(cache::local_pawn + off::PlayerState, player_state) && Mem::plausible_ptr(player_state))
+        {
+            cache::player_state = player_state;
+            uint8_t team = 0;
+            if (mem.read(player_state + off::TeamIndex, team))
+            {
+                cache::my_team_id = team;
+                cache::my_team_valid = true;
+            }
+        }
+    }
+
+    cache::game_state = 0;
+    if (!mem.read(cache::uworld + off::GameState, cache::game_state)) return;
+    if (!Mem::plausible_ptr(cache::game_state)) return;
+
+    // GameStateBase::PlayerArray { Data @+0x290, Num @+0x298, Max @+0x29C }
+    uintptr_t data = 0;
+    int32_t num = 0, max = 0;
+    if (!mem.read(cache::game_state + off::PlayerArray, data)) return;
+    if (!mem.read(cache::game_state + off::PlayerArray + 0x08, num)) return;
+    if (!mem.read(cache::game_state + off::PlayerArray + 0x0C, max)) return;
+
+    if (!Mem::plausible_ptr(data)) return;
+    if (num <= 0 || num > cfg::kMaxPlayers) return;
+    if (max < num || max > 4096) return;
+
+    cache::player_array = data;
+    cache::player_count = num;
+
+    cache::camera = get_view_point();
+    if (!cache::camera.valid)
+    {
+        cache::player_count = 0;
+        return;
+    }
+
+    for (int i = 0; i < num; ++i)
+    {
+        uintptr_t player_state = 0;
+        if (!mem.read(data + static_cast<uintptr_t>(i) * sizeof(uintptr_t), player_state)) continue;
+        if (!Mem::plausible_ptr(player_state)) continue;
+        if (player_state == cache::player_state) continue;
+
+        uint8_t spectator_flags = 0;
+        if (mem.read(player_state + off::bIsSpectator, spectator_flags))
+        {
+            // FILL: bIsSpectator shares its byte with bIsABot/bIsInactive; the bit
+            // index is not in the dump. Until it is confirmed the whole byte is
+            // ignored rather than guessed.
+            (void)spectator_flags;
+        }
+
+        uint8_t team = 0;
+        if (mem.read(player_state + off::TeamIndex, team))
+        {
+            if (cfg::kTeamCheck && cache::my_team_valid && team == cache::my_team_id) continue;
+        }
+
+        uintptr_t pawn = 0;
+        if (!mem.read(player_state + off::PawnPrivate, pawn)) continue;
+        if (!Mem::plausible_ptr(pawn)) continue;
+        if (pawn == cache::local_pawn) continue;
+
+        uintptr_t root = 0;
+        if (!mem.read(pawn + off::RootComponent, root)) continue;
+        if (!Mem::plausible_ptr(root)) continue;
+
+        Vector3 centre;
+        if (!component_world_location(root, centre)) continue;
+        if (!valid_vector(centre)) continue;
+
+        const double distance_m = cache::camera.location.distance(centre) / 100.0;
+        if (!std::isfinite(distance_m) || distance_m > cfg::kMaxTargetM) continue;
+
+        Vector3 aim;
+        if (!pawn_aim_point(pawn, root, centre, aim)) continue;
+
+        Vector2 aim2d;
+        if (!project_world_to_screen(aim, aim2d)) continue;
+
+        uintptr_t mesh = 0;
+        if (!mem.read(pawn + off::Mesh, mesh)) mesh = 0;
+        if (mesh && !Mem::plausible_ptr(mesh)) mesh = 0;
+
+        const bool visible = mesh ? is_visible(mesh) : false;
+
+        // --- visuals ------------------------------------------------------
+        if (settings::visuals::enable)
+        {
+            double half = cfg::kCapsuleHalfHeightFallback;
+            float capsule_half = 0.f;
+            if (mem.read(pawn + off::CapsuleHalfHeight, capsule_half) &&
+                std::isfinite(capsule_half) && capsule_half > 1.f && capsule_half < 500.f)
+                half = capsule_half;
+
+            const Vector3 top(centre.x, centre.y, centre.z + half);
+            const Vector3 bottom(centre.x, centre.y, centre.z - half);
+
+            Vector2 top2d, bottom2d;
+            if (project_world_to_screen(top, top2d) && project_world_to_screen(bottom, bottom2d))
+            {
+                const float box_height = static_cast<float>(std::fabs(bottom2d.y - top2d.y));
+                const float box_width = box_height * 0.50f;
+
+                if (box_height > 2.f && box_height < 4000.f)
+                {
+                    const float bx = static_cast<float>(top2d.x) - box_width * 0.5f;
+                    const float by = static_cast<float>(top2d.y);
+
+                    const DWORD box_color = visible ? D3DCOLOR_ARGB(255, 245, 245, 245)
+                                                    : D3DCOLOR_ARGB(255, 240, 60, 60);
+
+                    if (settings::visuals::box)
+                        draw::cornered_box(bx, by, box_width, box_height, box_color, 1.f);
+
+                    if (settings::visuals::fill_box)
+                        draw::rect_filled(bx, by, box_width, box_height, D3DCOLOR_ARGB(45, 0, 0, 0));
+
+                    if (settings::visuals::health_bar)
+                    {
+                        uintptr_t health_set = 0;
+                        float hp = 0.f, max_hp = 0.f;
+
+                        if (mem.read(pawn + off::HealthSet, health_set) && Mem::plausible_ptr(health_set) &&
+                            mem.read(health_set + off::Health, hp) && mem.read(health_set + off::MaxHealth, max_hp) &&
+                            std::isfinite(hp) && std::isfinite(max_hp) && max_hp > 0.f && max_hp < 100000.f &&
+                            hp >= 0.f && hp <= max_hp * 2.f)
+                        {
+                            float frac = static_cast<float>(hp / max_hp);
+                            if (frac > 1.f) frac = 1.f;
+
+                            draw::rect_filled(bx - 5.f, by, 3.f, box_height, D3DCOLOR_ARGB(120, 0, 0, 0));
+                            draw::rect_filled(bx - 5.f, by + box_height * (1.f - frac), 3.f, box_height * frac,
+                                              D3DCOLOR_ARGB(255, 90, 220, 120));
+                        }
+                    }
+
+                    if (settings::visuals::line)
+                        draw::line(static_cast<float>(settings::center_x), static_cast<float>(settings::height),
+                                   static_cast<float>(bottom2d.x), static_cast<float>(bottom2d.y), box_color, 1.f);
+
+                    if (settings::visuals::distance)
+                    {
+                        char label[64];
+                        snprintf(label, sizeof(label), "%.0fm", distance_m);
+                        draw::text_centered(static_cast<float>(bottom2d.x), static_cast<float>(bottom2d.y),
+                                            D3DCOLOR_ARGB(255, 240, 240, 240), label);
+                    }
+                }
+            }
+        }
+
+        // --- target selection --------------------------------------------
+        if (cfg::kVisibleOnly && !visible) continue;
+
+        const double dx = aim2d.x - settings::center_x;
+        const double dy = aim2d.y - settings::center_y;
+        const double screen_dist = std::sqrt(dx * dx + dy * dy);
+
+        if (!std::isfinite(screen_dist)) continue;
+        if (screen_dist < cfg::kMinTargetPx) continue;          // already on it
+        if (screen_dist > settings::aimbot::fov) continue;
+        if (screen_dist >= cache::closest_distance) continue;
+
+        cache::closest_distance = screen_dist;
+        cache::closest_mesh = mesh;
+        cache::closest_pawn = pawn;
+    }
+}
+
+// Sends mouse deltas only. All the gating happens in main_loop; this function
+// still refuses to move if the pieces it needs are not valid.
+inline void aimbot()
+{
+    if (!cache::closest_mesh && !cache::closest_pawn) return;
+    if (!cache::camera.valid) return;
+    if (!mem.alive()) return;
+
+    Vector3 aim;
+    bool have = false;
+
+    if (cfg::kBoneWorldLocations && cache::closest_mesh)
+        have = bone_world_location(cache::closest_mesh, cfg::kHeadBone, aim);
+
+    if (!have)
+    {
+        if (!cache::closest_pawn) return;
+
+        uintptr_t root = 0;
+        if (!mem.read(cache::closest_pawn + off::RootComponent, root) || !Mem::plausible_ptr(root)) return;
+
+        Vector3 centre;
+        if (!component_world_location(root, centre)) return;
+        if (!pawn_aim_point(cache::closest_pawn, root, centre, aim)) return;
+    }
+
+    if (!valid_vector(aim)) return;
+
+    Vector2 screen;
+    if (!project_world_to_screen(aim, screen)) return;
+
     const float smoothness = settings::aimbot::smoothness > 0.1f ? settings::aimbot::smoothness : 1.f;
-    const double gain = 1.0 / smoothness;
+    const double gain = 1.0 / static_cast<double>(smoothness);
 
-    double dx = (head2d.x - settings::center_x) * gain;
-    double dy = (head2d.y - settings::center_y) * gain;
+    double dx = (screen.x - settings::center_x) * gain;
+    double dy = (screen.y - settings::center_y) * gain;
 
-    const double step = sqrt(dx * dx + dy * dy);
+    const double step = std::sqrt(dx * dx + dy * dy);
+    if (!std::isfinite(step)) return;
+
     if (step > cfg::kMaxScreenStep)
     {
         const double scale = cfg::kMaxScreenStep / step;
@@ -1905,181 +1969,8 @@ inline void aimbot(uintptr_t target_mesh)
     input::move_mouse(dx, dy);
 }
 
-inline void draw_distance_label(const Vector2& at, float distance)
-{
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "%.0fm", distance);
-    draw::text_centered(static_cast<float>(at.x), static_cast<float>(at.y), D3DCOLOR_ARGB(255, 240, 240, 240), buffer);
-}
-
-inline void game_tick()
-{
-    if (!mem.alive()) return;
-
-    if (!cache::uworld || !looks_like_uworld(cache::uworld))
-        cache::uworld = resolve_uworld();
-    if (!cache::uworld) return;
-
-    cache::game_instance = mem.read<uintptr_t>(cache::uworld + off::GameInstance);
-    if (!cache::game_instance) return;
-
-    // UGameInstance::LocalPlayers is a TArray<ULocalPlayer*>: data ptr, then Num.
-    const uintptr_t local_players_array = mem.read<uintptr_t>(cache::game_instance + off::LocalPlayers);
-    if (!local_players_array) return;
-
-    cache::local_players = mem.read<uintptr_t>(local_players_array);
-    if (!cache::local_players) return;
-
-    // ULocalPlayer::PlayerController is not reflected, sits at +0x30.
-    cache::player_controller = mem.read<uintptr_t>(cache::local_players + off::LocalPlayerController);
-    if (!cache::player_controller) return;
-
-    cache::local_pawn = mem.read<uintptr_t>(cache::player_controller + off::LocalPawn);
-
-    if (cache::local_pawn)
-    {
-        // own position off the root component's relative transform: cheaper than
-        // the bone path and valid without a bone array
-        const uintptr_t root = mem.read<uintptr_t>(cache::local_pawn + off::RootComponent);
-        cache::local_root = root;
-
-        if (root)
-        {
-            cache::relative_location = read_vector3f(root + off::RelativeLocation);
-            if (!valid_vector(cache::relative_location)) cache::relative_location = Vector3();
-        }
-
-        cache::player_state = mem.read<uintptr_t>(cache::local_pawn + off::PlayerState);
-        if (cache::player_state)
-            cache::my_team_id = mem.read<uint8_t>(cache::player_state + off::TeamIndex);
-    }
-
-    cache::game_state = mem.read<uintptr_t>(cache::uworld + off::GameState);
-    if (!cache::game_state) return;
-
-    // TArray<APlayerState*> at GameStateBase::PlayerArray
-    cache::player_array = mem.read<uintptr_t>(cache::game_state + off::PlayerArray);
-    cache::player_count = mem.read<int>(cache::game_state + off::PlayerArray + sizeof(uintptr_t));
-    if (!cache::player_array || cache::player_count <= 0 || cache::player_count > 256) return;
-
-    cache::camera = get_view_point();
-    if (!valid_vector(cache::camera.location)) return;
-
-    cache::closest_distance = FLT_MAX;
-    cache::closest_mesh = 0;
-
-    for (int i = 0; i < cache::player_count; ++i)
-    {
-        const uintptr_t player_state = mem.read<uintptr_t>(cache::player_array + (i * sizeof(uintptr_t)));
-        if (!player_state) continue;
-
-        if (cfg::kSkipSpectators)
-        {
-            // bIsSpectator shares its byte with bIsABot/bIsInactive/bIsInactive
-            const uint8_t pstate_flags = mem.read<uint8_t>(player_state + off::bIsSpectator);
-            if (pstate_flags & cfg::bIsSpectatorBit) continue;
-        }
-
-        const int team = mem.read<int>(player_state + off::TeamIndex) & 0xFF;
-        if (cfg::kTeamCheck && team == cache::my_team_id) continue;
-
-        const uintptr_t pawn = mem.read<uintptr_t>(player_state + off::PawnPrivate);
-        if (!pawn || pawn == cache::local_pawn) continue;
-
-        // DBNO pawns stay valid targets, just drawn amber when the bit is known
-        bool downed = false;
-        if (cfg::kMarkDowned)
-        {
-            const uint8_t pawn_flags = mem.read<uint8_t>(pawn + off::bIsDBNO);
-            downed = (pawn_flags & cfg::bIsDBNOBit) != 0;
-        }
-
-        const uintptr_t mesh = mem.read<uintptr_t>(pawn + off::Mesh);
-        if (!mesh) continue;
-
-        const Vector3 head3d = bone_world_location(mesh, cfg::kHeadBone);
-        const Vector3 bottom3d = bone_world_location(mesh, cfg::kRootBone);
-        if (!valid_vector(head3d) || !valid_vector(bottom3d)) continue;
-
-        const Vector2 head2d = project_world_to_screen(head3d);
-        const Vector2 bottom2d = project_world_to_screen(bottom3d);
-
-        const float box_height = static_cast<float>(fabs(head2d.y - bottom2d.y));
-        const float box_width = box_height * 0.50f;
-        const float distance = static_cast<float>(cache::relative_location.distance(bottom3d)) / 100.f;
-
-        // health out of the ability system set: UFORTHealthSet { Health 0x48, MaxHealth 0x70 }
-        float hp = 0.f, max_hp = 0.f;
-        const uintptr_t health_set = mem.read<uintptr_t>(pawn + off::HealthSet);
-        if (health_set)
-        {
-            hp = mem.read<float>(health_set + off::Health);
-            max_hp = mem.read<float>(health_set + off::MaxHealth);
-        }
-
-        const bool visible = is_visible(mesh);
-
-        if (settings::visuals::enable && box_height > 2.f)
-        {
-            const float bx = static_cast<float>(head2d.x) - box_width * 0.5f;
-            const float by = static_cast<float>(head2d.y);
-
-            const DWORD box_color = downed    ? D3DCOLOR_ARGB(255, 240, 200, 60)
-                                  : visible   ? D3DCOLOR_ARGB(255, 245, 245, 245)
-                                              : D3DCOLOR_ARGB(255, 240, 60, 60);
-
-            if (settings::visuals::box)
-                draw::cornered_box(bx, by, box_width, box_height, box_color, 1.f);
-
-            if (settings::visuals::fill_box)
-                draw::rect_filled(bx, by, box_width, box_height, D3DCOLOR_ARGB(45, 0, 0, 0));
-
-            if (settings::visuals::health_bar && max_hp > 0.f && hp > 0.f)
-            {
-                const float frac = (hp / max_hp) > 1.f ? 1.f : (hp / max_hp);
-                draw::rect_filled(bx - 5.f, by, 3.f, box_height, D3DCOLOR_ARGB(120, 0, 0, 0));
-                draw::rect_filled(bx - 5.f, by + box_height * (1.f - frac), 3.f, box_height * frac,
-                                  D3DCOLOR_ARGB(255, 90, 220, 120));
-            }
-
-            if (settings::visuals::line)
-                draw::line(static_cast<float>(settings::center_x), static_cast<float>(settings::height),
-                           static_cast<float>(bottom2d.x), static_cast<float>(bottom2d.y), box_color, 1.f);
-
-            if (settings::visuals::distance)
-            {
-                char label[64];
-                snprintf(label, sizeof(label), "%.0fm", distance);
-                if (settings::visuals::health_bar && max_hp > 0.f)
-                {
-                    char with_hp[96];
-                    snprintf(with_hp, sizeof(with_hp), "%.0fm  %.0fhp", distance, hp);
-                    draw::text_centered(static_cast<float>(bottom2d.x), static_cast<float>(bottom2d.y),
-                                        D3DCOLOR_ARGB(255, 240, 240, 240), with_hp);
-                }
-                else
-                {
-                    draw::text_centered(static_cast<float>(bottom2d.x), static_cast<float>(bottom2d.y),
-                                        D3DCOLOR_ARGB(255, 240, 240, 240), label);
-                }
-            }
-        }
-
-        if (cfg::kVisibleOnly && !visible) continue;
-
-        const double dx = head2d.x - settings::center_x;
-        const double dy = head2d.y - settings::center_y;
-        const float screen_dist = static_cast<float>(sqrt(dx * dx + dy * dy));
-        if (screen_dist <= settings::aimbot::fov && screen_dist < cache::closest_distance)
-        {
-            cache::closest_distance = screen_dist;
-            cache::closest_mesh = mesh;
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
-//  menu (um/game.hpp render_menu)
+//  menu — same layout/tabs as before, plus config save/load in Misc
 // ---------------------------------------------------------------------------
 inline void render_menu()
 {
@@ -2092,6 +1983,8 @@ inline void render_menu()
     static float win_x = 80.f, win_y = 120.f;
     static bool  dragging = false;
     static float drag_dx = 0.f, drag_dy = 0.f;
+    static ULONGLONG status_until = 0;
+    static char  status_text[64] = { 0 };
 
     constexpr float w = 430.f, h = 300.f;
     constexpr float title_h = 24.f;
@@ -2147,30 +2040,127 @@ inline void render_menu()
         ui::checkbox(x, y, "health bar + hp", &settings::visuals::health_bar); y += 24.f;
 
         draw::text(x, y + 6.f, ui::kColTextDim,
-                   settings::visuals::enable ? "white = visible, red = occluded, amber = downed" : "");
+                   settings::visuals::enable ? "green = capsule box from validated positions" : "");
     }
     else
     {
-        draw::text(x, y, ui::kColTextDim, "INSERT toggles this menu");
-        y += 22.f;
-        draw::text(x, y, ui::kColTextDim, "END unloads the cheat");
-        y += 22.f;
-        draw::text(x, y, ui::kColTextDim, input::ready ? "input: spoofed NtUserSendInput" : "input: SendInput fallback");
-        y += 22.f;
-        draw::text(x, y, ui::kColTextDim, "offsets: season-locked, refresh off::UWorld per patch");
+        char line[128];
+
+        snprintf(line, sizeof(line), "input: SendInput (no driver, no injection)");
+        draw::text(x, y, ui::kColTextDim, line); y += 22.f;
+
+        snprintf(line, sizeof(line), "uworld: %s", cache::uworld_ready ? "validated" : "not resolved");
+        draw::text(x, y, ui::kColTextDim, line); y += 22.f;
+
+        snprintf(line, sizeof(line), "offsets: v43.00 dump, bones %s",
+                 cfg::kBoneWorldLocations ? "on" : "off (capsule aim)");
+        draw::text(x, y, ui::kColTextDim, line); y += 22.f;
+
+        if (ui::button(x, y, 140.f, 24.f, "save cfg"))
+        {
+            snprintf(status_text, sizeof(status_text), config::save() ? "cfg saved" : "cfg save failed");
+            status_until = GetTickCount64() + 2000;
+        }
+        if (ui::button(x + 150.f, y, 140.f, 24.f, "load cfg"))
+        {
+            snprintf(status_text, sizeof(status_text), config::load() ? "cfg loaded" : "cfg load failed");
+            status_until = GetTickCount64() + 2000;
+        }
         y += 34.f;
+
+        if (status_text[0] && GetTickCount64() < status_until)
+            draw::text(x, y, ui::kColAccent, status_text);
+        y += 22.f;
+
         if (ui::button(x, y, 140.f, 24.f, "unload")) overlay::running = false;
     }
 }
 
 // ---------------------------------------------------------------------------
-//  main loop
+//  device loss / resize — one place, checked every frame
 // ---------------------------------------------------------------------------
+namespace overlay
+{
+    inline bool font_ok = false;
+
+    inline void release_font()
+    {
+        if (draw::font.tex) { draw::font.tex->Release(); draw::font.tex = nullptr; }
+        font_ok = false;
+    }
+
+    inline bool recreate_font()
+    {
+        font_ok = draw::create_font(device, draw::font, cfg::kFontPx, "Consolas");
+        return font_ok;
+    }
+
+    inline bool reset_device()
+    {
+        if (!device) return false;
+
+        release_font();
+
+        const HRESULT hr = device->Reset(&params);
+        if (FAILED(hr))
+        {
+            printf("[!] device Reset failed (0x%08lX)\n", static_cast<unsigned long>(hr));
+            destroy_device();
+            if (!init_device()) return false;
+        }
+
+        if (!recreate_font()) return false;
+        return true;
+    }
+
+    // Returns false when the overlay can no longer render.
+    inline bool ensure_device()
+    {
+        if (!device)
+        {
+            if (!init_device()) return false;
+            return recreate_font();
+        }
+
+        const HRESULT coop = device->TestCooperativeLevel();
+        if (coop == D3DERR_DEVICELOST) return true;          // wait for the next frame
+        if (coop == D3DERR_DEVICENOTRESET)
+            return reset_device();
+
+        if (FAILED(coop))
+        {
+            printf("[!] TestCooperativeLevel failed (0x%08lX)\n", static_cast<unsigned long>(coop));
+            destroy_device();
+            return init_device() && recreate_font();
+        }
+
+        return true;
+    }
+
+    inline void resize(int w, int h)
+    {
+        if (!hwnd || w <= 0 || h <= 0) return;
+
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, w, h, SWP_NOACTIVATE);
+        params.BackBufferWidth  = static_cast<UINT>(w);
+        params.BackBufferHeight = static_cast<UINT>(h);
+
+        if (device)
+        {
+            if (!reset_device())
+                printf("[!] overlay lost after resize\n");
+        }
+    }
+}
+
 inline bool params_dirty(UINT cur_w, int new_w, UINT cur_h, int new_h)
 {
     return static_cast<int>(cur_w) != new_w || static_cast<int>(cur_h) != new_h;
 }
 
+// ---------------------------------------------------------------------------
+//  main loop
+// ---------------------------------------------------------------------------
 inline void main_loop()
 {
     LARGE_INTEGER freq{}, last{};
@@ -2180,7 +2170,7 @@ inline void main_loop()
     while (overlay::running)
     {
         MSG msg{};
-        while (PeekMessageA(&msg, overlay::hwnd, 0, 0, PM_REMOVE))
+        while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE))
         {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
@@ -2189,147 +2179,249 @@ inline void main_loop()
         if (GetAsyncKeyState(cfg::kMenuKey) & 1) settings::show_menu = !settings::show_menu;
         if (GetAsyncKeyState(cfg::kExitKey) & 1) break;
 
-        static bool menu_was_shown = settings::show_menu;
-        if (menu_was_shown != settings::show_menu)
-        {
-            menu_was_shown = settings::show_menu;
-            LONG_PTR ex = GetWindowLongPtrA(overlay::hwnd, GWL_EXSTYLE);
-            if (settings::show_menu) ex &= ~static_cast<LONG_PTR>(WS_EX_TRANSPARENT);
-            else                     ex |= static_cast<LONG_PTR>(WS_EX_TRANSPARENT);
-            SetWindowLongPtrA(overlay::hwnd, GWL_EXSTYLE, ex);
-        }
-
         settings::width  = GetSystemMetrics(SM_CXSCREEN);
         settings::height = GetSystemMetrics(SM_CYSCREEN);
         settings::center_x = settings::width / 2;
         settings::center_y = settings::height / 2;
 
-        // keep the overlay glued above the game
-        if (!overlay::game_wnd || !IsWindow(overlay::game_wnd))
-            overlay::game_wnd = overlay::find_process_window(mem.pid);
+        // menu state drives click-through: open = we want the cursor
+        overlay::set_click_through(!settings::show_menu);
 
-        static bool overlay_raised = false;
-        const bool game_focused = overlay::game_wnd && GetForegroundWindow() == overlay::game_wnd;
-        if (game_focused != overlay_raised)
+        const bool focused = game_foreground();
+        static bool was_focused = false;
+        if (focused != was_focused)
         {
-            overlay_raised = game_focused;
-            if (game_focused)
+            was_focused = focused;
+            if (overlay::hwnd)
+            {
+                ShowWindow(overlay::hwnd, focused ? SW_SHOWNOACTIVATE : SW_HIDE);
                 SetWindowPos(overlay::hwnd, HWND_TOPMOST, 0, 0, settings::width, settings::height,
-                             SWP_NOACTIVATE);
-            else
-                ShowWindow(overlay::hwnd, SW_HIDE), ShowWindow(overlay::hwnd, SW_SHOWNOACTIVATE);
+                             SWP_NOACTIVATE | (focused ? 0 : SWP_NOREDRAW));
+            }
         }
 
         if (params_dirty(overlay::params.BackBufferWidth, settings::width,
                          overlay::params.BackBufferHeight, settings::height))
+            overlay::resize(settings::width, settings::height);
+
+        if (!overlay::ensure_device())
         {
-            overlay::params.BackBufferWidth  = settings::width;
-            overlay::params.BackBufferHeight = settings::height;
-            SetWindowPos(overlay::hwnd, HWND_TOPMOST, 0, 0, settings::width, settings::height, SWP_NOACTIVATE);
-            overlay::release_font();
-            if (FAILED(overlay::device->Reset(&overlay::params)))
+            printf("[!] overlay device unavailable, stopping\n");
+            overlay::running = false;
+            break;
+        }
+
+        // game handle can go stale (game restart); reattach at a slow cadence
+        if (!mem.alive())
+        {
+            static ULONGLONG last_attach = 0;
+            const ULONGLONG now = GetTickCount64();
+            if (now - last_attach > 2000)
             {
-                overlay::running = false;
-                break;
+                last_attach = now;
+                if (mem.attach(cfg::kProcessName))
+                {
+                    cache::uworld = 0;
+                    cache::uworld_ready = false;
+                    scanner::prepared = false;
+                    scanner::exhausted = false;
+                    overlay::game_wnd = overlay::find_process_window(mem.pid);
+                    printf("[*] attached: pid %lu base 0x%llX\n", static_cast<unsigned long>(mem.pid),
+                           static_cast<unsigned long long>(mem.base));
+                }
             }
-            draw::create_font(overlay::device, draw::font, cfg::kFontPx, "Consolas");
         }
 
         draw::reset();
         ui::begin_frame();
 
-        const bool aiming = settings::aimbot::enable && !settings::show_menu &&
-                            (GetAsyncKeyState(settings::aimbot::aim_key) & 0x8000);
+        // mouse movement requires: game focused, menu closed, aimbot on, key held
+        const bool aiming = settings::aimbot::enable && !settings::show_menu && focused &&
+                            (GetAsyncKeyState(settings::aimbot::aim_key) & 0x8000) != 0;
 
         game_tick();
 
-        if (aiming && cache::closest_mesh)
-            aimbot(cache::closest_mesh);
+        if (aiming) aimbot();
 
         render_menu();
 
-        overlay::device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.f, 0);
-        if (SUCCEEDED(overlay::device->BeginScene()))
+        if (overlay::device)
         {
-            draw::flush(overlay::device);
-            overlay::device->EndScene();
-        }
+            overlay::device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.f, 0);
+            if (SUCCEEDED(overlay::device->BeginScene()))
+            {
+                draw::flush(overlay::device);
+                overlay::device->EndScene();
+            }
 
-        const HRESULT present = overlay::device->Present(nullptr, nullptr, nullptr, nullptr);
-        if (present == D3DERR_DEVICELOST)
-            overlay::on_device_lost();
+            const HRESULT present = overlay::device->Present(nullptr, nullptr, nullptr, nullptr);
+            if (present == D3DERR_DEVICELOST || present == D3DERR_DEVICENOTRESET)
+                overlay::reset_device();
+        }
 
         // tick floor: keeps the read rate at cfg::kTickMs without capping the overlay
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
-        const double elapsed_ms = (now.QuadPart - last.QuadPart) * 1000.0 / freq.QuadPart;
+        const double elapsed_ms = (now.QuadPart - last.QuadPart) * 1000.0 /
+                                  static_cast<double>(freq.QuadPart > 0 ? freq.QuadPart : 1);
         if (elapsed_ms < cfg::kTickMs)
             Sleep(static_cast<DWORD>(cfg::kTickMs - elapsed_ms));
         QueryPerformanceCounter(&last);
     }
 }
 
-int main()
+// ---------------------------------------------------------------------------
+//  startup / teardown
+// ---------------------------------------------------------------------------
+inline void parse_args(int argc, char** argv, uintptr_t& uworld_override, bool& force_scan)
+{
+    for (int i = 1; i < argc; ++i)
+    {
+        if (_stricmp(argv[i], "--uworld") == 0 && i + 1 < argc)
+        {
+            char* end = nullptr;
+            const unsigned long long v = _strtoui64(argv[i + 1], &end, 0);
+            if (end && *end == '\0' && v > 0x10000 && v < 0x7FFFFFFFFFFFULL)
+            {
+                uworld_override = static_cast<uintptr_t>(v);
+                printf("[*] --uworld 0x%llX (will be validated before use)\n",
+                       static_cast<unsigned long long>(v));
+            }
+            else
+            {
+                printf("[!] --uworld value not a plausible pointer: %s\n", argv[i + 1]);
+            }
+            ++i;
+        }
+        else if (_stricmp(argv[i], "--scan") == 0)
+        {
+            force_scan = true;
+        }
+        else if (_stricmp(argv[i], "--help") == 0 || _stricmp(argv[i], "-h") == 0)
+        {
+            printf("usage: fortnite_external [--uworld 0xOFFSET] [--scan]\n"
+                   "  --uworld  GWorld offset inside the module (validated)\n"
+                   "  --scan    run the bounded watcher-section scan now\n"
+                   "keys: INSERT menu, END unload, aim key held to aim\n");
+            ExitProcess(0);
+        }
+    }
+}
+
+int main(int argc, char** argv)
 {
     SetProcessDPIAware();
-    SetConsoleTitleA("fortnite external");
+    SetConsoleTitleA("fortnite external (user mode)");
+    timeBeginPeriod(1);
 
     settings::width  = GetSystemMetrics(SM_CXSCREEN);
     settings::height = GetSystemMetrics(SM_CYSCREEN);
     settings::center_x = settings::width / 2;
     settings::center_y = settings::height / 2;
 
-    if (!librarys::init())
-    {
-        printf("[!] librarys::init failed\n");
-        Sleep(3000);
-        return 1;
-    }
+    uintptr_t uworld_override = cfg::kUWorldOverride;
+    bool force_scan = false;
+    parse_args(argc, argv, uworld_override, force_scan);
 
     printf("[*] waiting for Fortnite...\n");
-    while (!mem.alive())
-    {
-        if (!mem.attach(cfg::kProcessName)) { Sleep(500); continue; }
-        Sleep(200);
-    }
-
-    if (!input::init())
-        printf("[!] spoofed input unavailable, SendInput fallback active\n");
-
-    gui::init();
-
-    overlay::game_wnd = overlay::find_process_window(mem.pid);
-    overlay::create_window();
-    if (!overlay::hwnd)
-    {
-        printf("[!] overlay window creation failed\n");
-        Sleep(3000);
-        return 1;
-    }
-    if (!overlay::init_device())
-    {
-        printf("[!] D3D9Ex device creation failed\n");
-        Sleep(3000);
-        return 1;
-    }
-
-    draw::create_font(overlay::device, draw::font, cfg::kFontPx, "Consolas");
+    while (!mem.attach(cfg::kProcessName))
+        Sleep(500);
 
     printf("[*] base 0x%llX  pid %lu\n",
            static_cast<unsigned long long>(mem.base), static_cast<unsigned long>(mem.pid));
 
-    if (!resolve_uworld())
-        printf("[!] UWorld not found - menu opens, ESP/aim stay idle until the scan hits\n");
-    else
-        printf("[*] UWorld ready\n");
+    if (uworld_override)
+    {
+        const uintptr_t world = [&]() -> uintptr_t {
+            uintptr_t w = 0;
+            if (mem.read(mem.base + uworld_override, w) && looks_like_uworld(w)) return w;
+            return 0;
+        }();
+
+        if (world)
+        {
+            cache::uworld = world;
+            cache::uworld_ready = true;
+            printf("[*] UWorld accepted from --uworld: 0x%llX\n", static_cast<unsigned long long>(world));
+        }
+        else
+        {
+            printf("[!] --uworld 0x%llX rejected by validation (wrong for this build?)\n",
+                   static_cast<unsigned long long>(uworld_override));
+        }
+    }
+
+    if (force_scan && !cache::uworld_ready)
+    {
+        printf("[*] --scan: walking the writable sections, 1 MiB per step\n");
+        while (!scanner::exhausted && !cache::uworld_ready)
+        {
+            cache::uworld = scanner::step(mem.base);
+            cache::uworld_ready = cache::uworld != 0;
+            Sleep(static_cast<DWORD>(cfg::kScanRetryMs));
+        }
+    }
+
+    if (!cache::uworld_ready)
+    {
+        cache::uworld = resolve_uworld();
+        cache::uworld_ready = cache::uworld != 0;
+        cache::last_resolve_ms = GetTickCount64();
+
+        if (!cache::uworld_ready)
+            printf("[!] UWorld not resolved yet — menu opens, aim/ESP stay idle. "
+                   "The bounded scan continues in the background.\n");
+    }
+
+    // bone aim is configured but not wired: say so once, with the offsets to check
+    if (cfg::kBoneWorldLocations && (cfg::kTransformStride < 0x20 || !off::BoneArray))
+    {
+        printf("[!] cfg::kBoneWorldLocations is on but the bone data is not validated:\n"
+               "    kTransformStride=0x%llX (need 0x60 FTransform or 0x30 FTransform3f),\n"
+               "    off::BoneArray=0x%llX (0 = falling back to mesh+0x%llX CachedComponentSpaceTransforms).\n"
+               "    Falling back to capsule aim until those are filled in.\n",
+               static_cast<unsigned long long>(cfg::kTransformStride),
+               static_cast<unsigned long long>(off::BoneArray),
+               static_cast<unsigned long long>(off::BoneSpaceTransforms));
+    }
+
+    overlay::game_wnd = overlay::find_process_window(mem.pid);
+    if (!overlay::create_window())
+    {
+        printf("[!] overlay window creation failed\n");
+        mem.detach();
+        timeEndPeriod(1);
+        return 1;
+    }
+
+    if (!overlay::init_device())
+    {
+        printf("[!] D3D9Ex device creation failed\n");
+        overlay::destroy_window();
+        mem.detach();
+        timeEndPeriod(1);
+        return 1;
+    }
+
+    if (!overlay::recreate_font())
+    {
+        printf("[!] font creation failed, not running with a null font\n");
+        overlay::destroy_device();
+        overlay::destroy_window();
+        mem.detach();
+        timeEndPeriod(1);
+        return 1;
+    }
 
     main_loop();
 
+    // teardown, in the only order that is safe: font -> device -> d3d -> window
     overlay::release_font();
-    if (overlay::device) overlay::device->Release();
-    if (overlay::d3d) overlay::d3d->Release();
-    if (overlay::hwnd) DestroyWindow(overlay::hwnd);
+    overlay::destroy_device();
+    overlay::destroy_window();
+    mem.detach();
+    timeEndPeriod(1);
+
+    printf("[*] unloaded\n");
     return 0;
 }
-
-#endif // _KERNEL_MODE

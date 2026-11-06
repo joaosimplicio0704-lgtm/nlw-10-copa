@@ -1,2 +1,5 @@
-tools/fake_win/
-tools/fake_km/
+tools/.gate_*
+fortnite-external/*.obj
+fortnite-external/*.exe
+fortnite-external/*.pdb
+fortnite-external/fortnite_external.cfg.json

@@ -67,7 +67,7 @@ pushd "%~dp0"
 cl /nologo /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS ^
    fortnite_external_single.cpp ^
    /link /SUBSYSTEM:CONSOLE /OUT:fortnite_external.exe ^
-   d3d9.lib dwmapi.lib user32.lib gdi32.lib psapi.lib advapi32.lib
+   d3d9.lib dwmapi.lib user32.lib gdi32.lib psapi.lib winmm.lib
 set "BUILD_RESULT=%errorlevel%"
 popd
 

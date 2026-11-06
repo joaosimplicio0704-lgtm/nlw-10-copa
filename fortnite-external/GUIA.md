@@ -1,7 +1,11 @@
 # GUIA — como compilar e usar
 
 Tudo que você precisa está em **um arquivo**: `fortnite_external_single.cpp`.
-Ele já traz o driver (metade `_KERNEL_MODE`), o overlay e os offsets da v43.00 embutidos.
+Ele traz o overlay, o leitor de memória (user mode) e os offsets da v43.00 embutidos.
+
+**Não existe mais driver.** O programa é um external comum: `OpenProcess` +
+`ReadProcessMemory` para ler, `SendInput` para o mouse, janela D3D9Ex por cima.
+Nada é escrito na memória do jogo, nada é injetado.
 
 ---
 
@@ -132,15 +136,6 @@ cl /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS fortnite_external_single.c
 
 ## 2. Como executar (Windows)
 
-Antes de mexer com driver, teste o caminho simples. Abra o `.cpp` no editor e
-troque **uma linha** no bloco `namespace cfg` (fica no topo):
-
-```cpp
-constexpr bool  kUseCallbackDriver = false;   // <- era true
-```
-
-Compile de novo. Agora ele usa `OpenProcess` + `ReadProcessMemory` em vez do driver.
-
 Ordem de execução:
 
 1. abre o Fortnite e chega no **lobby** (ou num modo offline/criativo)
@@ -151,12 +146,21 @@ Ordem de execução:
 ```
 [*] waiting for Fortnite...
 [*] base 0x7FF6XXXXXXXX  pid 25184
+[*] UWorld scan prepared: 6 writable section(s), 41.3 MiB total
 [*] UWorld resolved by scan: base+0x10AEC0B8 -> 0x1F2A...
-[*] UWorld ready
 ```
 
-`UWorld resolved by scan` = ele achou o ponteiro sozinho, você **não precisa** do
-número que faltava no dump. Se aparecer `UWorld not found`, veja a seção 5.
+Se você já tem o offset do GWorld pra esse patch, passe na linha de comando — ele é
+validado antes de ser aceito:
+
+```
+fortnite_external.exe --uworld 0x1C8E1578
+```
+
+`accepted` = bateu na validação; `rejected` = não é o GWorld dessa build (número de
+outro patch/fórum). Sem argumento ele varre sozinho, 1 MiB a cada 500 ms, e continua
+tentando em segundo plano enquanto o menu já está aberto. `--scan` faz essa varredura
+na hora, antes de abrir o overlay. Se aparecer `UWorld not found`, veja a seção 5.
 
 5. o overlay aparece; **clique uma vez dentro do jogo** (pra ele ter o foco) e aperte
    **INSERT** pra abrir o menu. Com o menu aberto o mouse volta a funcionar na tela;
@@ -184,43 +188,43 @@ Guias rápidos dentro do menu:
 
 ---
 
-## 4. Driver (opcional, é o que o repo original usava)
+## 4. O que foi removido (e por quê)
 
-O driver faz leitura por memória física, então não aparece como `ReadProcessMemory`.
-Para usar:
+O repo original tinha duas metades: um driver WDM que trocava o callback do
+`win32k.sys` para ler memória física, e o overlay rodando com token duplicado do
+`winlogon` na banda UIAccess. Nada disso está aqui:
 
-1. Instale o **WDK** (Windows Driver Kit) junto com o Visual Studio.
-2. Crie um projeto **Empty WDM Driver** (x64/Release).
-3. Adicione o **mesmo** `fortnite_external_single.cpp`.
-4. Em *Propriedades → C/C++ → Pré-processador → Definições*, adicione `_KERNEL_MODE`.
-5. Build → sai um `.sys`.
-6. Mapeie o `.sys` com **kdmapper** (`kdmapper.exe fortnite_external.sys`) — o driver
-   não é assinado, então não dá pra instalar por serviço.
-7. Volte `kUseCallbackDriver = true` no `.cpp` e recompile o `.exe`.
+| removido | por quê |
+|---|---|
+| driver + hook de callback | não é necessário para ler um processo externo |
+| leitura de memória física / walk de page tables | `ReadProcessMemory` faz o mesmo, sem ring 0 |
+| `WriteProcessMemory` | o programa não escreve no jogo; mira só com `SendInput` |
+| cópia do stub de `NtUserSendInput` | `SendInput` direto |
+| duplicação de token do winlogon / UIAccess | exigia `SeTcbPrivilege` e binário assinado |
 
-Se algo aqui der errado, volte pro passo 2 — o caminho sem driver funciona igual,
-só é mais detectável.
-
----
+O overlay agora é uma janela `WS_EX_LAYERED | WS_EX_TOPMOST` comum: fica por cima,
+é click-through quando o menu está fechado e volta a aceitar clique quando o menu abre.
 
 ## 5. Se não funcionar
 
 | sintoma | causa provável | o que fazer |
 |---|---|---|
 | console fica em `waiting for Fortnite...` | jogo não está aberto, ou nome do processo diferente | confira no Gerenciador de Tarefas: tem que ser `FortniteClient-Win64-Shipping.exe` |
-| `UWorld not found` | scan não achou / jogo em outro mapa | entre numa partida (lobby às vezes não tem GameState) e aperte o botão de reload no menu; ou ponha o número em `kUWorldFallback` |
+| `UWorld not found` | scan não achou / jogo em outro mapa | entre numa partida (o lobby às vezes não tem GameState) e rode de novo com `--scan`; ou passe `--uworld 0x...` |
 | `OpenProcess` falha / base 0x0 | não rodou como admin | executa como administrador |
 | nada aparece na tela, console ok | jogo em **fullscreen exclusivo** | troque pra *Janela sem bordas* (borderless) nas opções do Fortnite |
 | overlay aparece mas ESP vazio | você está no lobby / espectador | entre na partida |
 | menu abre mas não clica | overlay com `WS_EX_TRANSPARENT` | feche e abra o menu com `INSERT` (ele troca o estilo) |
 | box desenhada no lugar errado | offsets de patch novo | regenere o header (seção 6) |
+| `--uworld ... rejected` | o offset não é o GWorld dessa build | use `--scan` e copie o `base+0x...` que ele imprimir |
+| tudo some quando você clica fora | é o comportamento esperado | mouse só se move com o jogo em foco e o menu fechado |
 
 ---
 
 ## 6. Quando sair patch novo
 
-`off::UWorld` muda todo update — mas agora ele é resolvido em runtime, então só
-quebra se algum **outro** offset mudar. Para atualizar:
+`UWorld` não está no dump e é resolvido em runtime, então só quebra se algum
+**outro** offset mudar. Para atualizar:
 
 1. baixe o dump novo (OffsetDeck ou um SDK Dump da season)
 2. `python3 tools/gen_offsets.py dump_novo.json > fortnite-external/offsets_gen.hpp`
@@ -229,16 +233,27 @@ quebra se algum **outro** offset mudar. Para atualizar:
 
 Se `tools/` não estiver na sua máquina (você copiou só o `.cpp`), dá pra editar à
 mão: o `off::` está logo no começo do arquivo, cada linha tem o `Struct::Campo`
-de origem no comentário.
+de origem no comentário. O bloco `off_layout` no fim do header é a checagem de
+layout derivada do dump (vetores e rotators de 3 doubles, FOV float, TeamIndex
+1 byte) — se um dump novo tiver outro layout, corrija ali antes de confiar.
 
 ---
 
 ## 7. Detalhe honesto
 
-`kVisibleOnly`, `kSkipSpectators` e `kMarkDowned` vêm **desligados** de propósito:
-o dump dá o byte dos bitfields mas não o índice do bit, e chutar isso deixaria o
-ESP mentindo. Se quiser ligar, leia o byte em dois estados conhecidos (visível vs
-atrás de parede) e ajuste o `constexpr uint8_t kRecentlyRenderedBit = 0x01;`.
+Três coisas vêm **desligadas** de propósito porque o dump não as fecha:
 
-E o de sempre: teste em VM, e exclua a pasta do build no Defender antes de compilar —
-o driver mexe em callback do win32k e o Defender come o `.sys` no meio do build.
+- `kVisibleOnly` / bit de `bRecentlyRendered` — o dump dá o byte (0x7E1), não o bit.
+  Chutar o bit faria o ESP mentir sobre quem está visível.
+- `bIsSpectator` / `bIsDBNO` — mesma história (bytes 0x282 / 0x892). Não são lidos.
+- `kBoneWorldLocations` — mira por osso. O dump não diz se
+  `CachedBoneSpaceTransforms` é bone-space ou component-space, nem se o elemento é
+  `FTransform` (0x60) ou `FTransform3f` (0x30). Sem isso, a mira usa o centro da
+  cápsula + `BaseEyeHeight - CapsuleHalfHeightFortPawn`, que são valores validados.
+
+Para ligar a mira por osso: meça o stride e o espaço em jogo (receita no bloco
+`BoneArray` do `offsets_gen.hpp`), preencha `kTransformStride` e
+`kBoneTransformsAreFloat`, e vire `kBoneWorldLocations = true`.
+
+E o de sempre: rode elevado, jogo em *janela sem bordas*, e teste primeiro num modo
+offline/criativo ou servidor de prática.

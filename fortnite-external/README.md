@@ -1,158 +1,135 @@
-# fortnite external — single-file transcription, v43.00 offsets
+# fortnite external — user-mode only, v43.00 dump
 
-`fortnite_external.cpp` is the whole of
+External cheat shell for Fortnite (UE5), transcribed from
 [`xetzzy/Fortnite-External-Source`](https://github.com/xetzzy/Fortnite-External-Source)
-collapsed into one translation unit, re-pointed at an OffsetDeck dump for
-**Fortnite v43.00 (UE5)**. `offsets_gen.hpp` next to it is generated, never
-hand-edited.
+and re-pointed at an OffsetDeck dump for **v43.00**.
+
+**User mode only.** `OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION)` +
+`ReadProcessMemory` for reads, `SendInput` for the mouse, a D3D9Ex layered window
+for the overlay. The kernel driver, the win32k callback hook, physical-memory
+reads, `WriteProcessMemory`, the copied `NtUserSendInput` syscall stub and the
+winlogon/UIAccess token duplication were **removed**, not disabled. Nothing is
+written into the game process and nothing is injected.
 
 ## Files
 
 | file | what |
 |---|---|
-| **`fortnite_external_single.cpp`** | **everything in one file** — driver + cheat + offsets, no local includes. This is the one to compile |
-| `GUIA.md` | passo a passo em português: compilar no Visual Studio, rodar, teclas, erros comuns |
-| `fortnite_external.sln` / `.vcxproj` | solution pronta (VS 2022, x64, C++17, console, UAC admin) |
-| `fortnite_external.cpp` | same program, offsets in `offsets_gen.hpp` (easier to diff) |
-| `offsets_gen.hpp` | generated offset table (`off::` flat + `sch::` full dump) |
-| `../tools/gen_offsets.py` | offset generator; reads the dump JSON |
-| `../tools/build_single.py` | collapses source + offsets into the single file |
-| `../tools/syntax_check.py` | compiles the user-mode half with g++ against fake Win32/D3D9 headers |
-| `../tools/syntax_check_km.py` | same for the driver half against a fake `<ntifs.h>` |
-| `../tools/check_all.sh` | regenerate + rebuild single file + both gates |
-| `../tools/fortnite_offsets_43.00.json` | the dump this was built from (5886 fields, 240 structs) |
-| `../tools/fortnite_offsets_43.00.provenance.json` | source/version of that dump |
+| **`fortnite_external_single.cpp`** | **generated** single translation unit — this is the one you compile |
+| `fortnite_external.cpp` | same program with `#include "offsets_gen.hpp"` (easier to diff) |
+| `offsets_gen.hpp` | generated offset table + layout asserts for this dump |
+| `build.bat` | MSVC build; finds `vcvars64.bat` itself |
+| `fortnite_external.sln` / `.vcxproj` | VS 2022 solution, x64, C++17, console |
+| `GUIA.md` | passo a passo em português |
+| `../tools/gen_offsets.py` | dump JSON → `offsets_gen.hpp` |
+| `../tools/build_single.py` | source + header → single file, then runs the gate |
+| `../tools/syntax_check.py` | **real** compile + link for x86_64-windows (zig or mingw-w64) |
+| `../tools/check_all.sh` | regenerate + rebuild + gate |
+| `../tools/fortnite_offsets_43.00.json` | the dump (240 structs, 5886 fields) |
 
-## What changed vs. the original source
+## Dependencies
 
-| original | here |
-|---|---|
-| `km/main.cpp`, `defs.hpp`, `utils.hpp` | same driver logic under `#ifdef _KERNEL_MODE` |
-| `um/librarys.hpp` … `um/main.cpp` | same code, flattened into namespaces |
-| `um/imgui/*` (~57k lines) | dropped; GDI glyph atlas + immediate-mode draw list and menu |
-| hardcoded 2023 offsets | `offsets_gen.hpp`, generated from the v43.00 dump |
-
-Behaviour fixes that came out of reading the original:
-
-- `render_menu()`'s aim-key switch had no `break`s → the key always ended as RMB.
-- camera was read from `UWorld+0x110/0x120` (a 2023 layout). Now it comes from
-  `APlayerCameraManager::CameraCachePrivate` → `FCameraCacheEntry::POV`
-  (`FMinimalViewInfo`: location +0x00, rotation +0x18, FOV +0x30).
-- visibility used `LastSubmitTime` / `LastRenderTimeOnScreen`, which are private
-  in this build. Replaced by `SkinnedMeshComponent::bRecentlyRendered` (0x7E1).
-- the original recomputed the camera inside every W2S call (3 matrix reads per
-  bone); the camera is now read once per tick.
-
-## UWorld: resolved at runtime
-
-The one value the dump does not carry is now found at startup instead of being
-a hardcoded FILL. `resolve_uworld()` tries, in order:
-
-1. `off::UWorld` from the generated header,
-2. `cfg::kUWorldFallback` if you set it,
-3. a scan of `base+0x8000000 .. base+0x20000000` for a qword that passes
-   `looks_like_uworld()`: `UWorld+OwningGameInstance` valid **and**
-   `GameInstance+LocalPlayers` valid **and** `UWorld+GameState` valid **and**
-   `GameState+PlayerArray` valid. Four independent hops — random data does not
-   survive that.
-
-After a map change or respawn the pointer is re-validated each tick and re-resolved
-if it went bad, so nothing needs restarting.
-
-## The walk (v43.00)
+C++17, Windows SDK only. No ImGui, no Boost, no vcpkg, nothing to fetch.
 
 ```
-base + UWorld                       // FILL — not in the dump, see below
-  + World::OwningGameInstance   0x248
-  + GameInstance::LocalPlayers  0x38   -> TArray<ULocalPlayer*>
-  ULocalPlayer + 0x30                  -> APlayerController (not reflected)
-  + Controller::Pawn            0x2B8  -> AFortPlayerPawn
-  + Character::Mesh             0x2F8  -> USkeletalMeshComponent
-  + Pawn::PlayerState           0x298  -> AFortPlayerStateAthena
-  + FortPlayerStateAthena::TeamIndex 0xF81  (int32, low byte holds the team; sparse)
-
-World::GameState                0x1D0 -> AGameStateBase
-  + GameStateBase::PlayerArray  0x290 -> TArray<APlayerState*>  (ptr then count)
-  PlayerState::PawnPrivate      0x2F0
+d3d9.lib dwmapi.lib user32.lib gdi32.lib psapi.lib winmm.lib
 ```
 
-Bones and world transforms:
-
-- `SkeletalMeshComponent::CachedBoneSpaceTransforms` at **0x9B8**, `FTransform3f`,
-  **0x30 stride** (quat 0x00, translation 0x10, scale 0x20).
-- `ComponentToWorld` is **not in the dump** (private). The cheat rebuilds it by
-  walking `SceneComponent::AttachParent` (0xD0) and composing
-  `RelativeLocation 0x140` / `RelativeRotation 0x158` / `RelativeScale3D 0x170`,
-  depth-capped at 16 links.
-- Head bone stays 109; root 0.
-
-Health comes from the ability set: `FortPawn::HealthSet` 0x1430 →
-`FortHealthSet::Health 0x48`, `MaxHealth 0x70` (floats).
-
-## Three values the dump does not carry (FILL)
-
-1. **`off::UWorld`** — the OffsetDeck export shipped `globals: {}`, and `UWorld`
-   is not inside any struct, so it is the one number you have to supply.
-   `cfg::kUWorldFallback` is the second chance if `off::UWorld` is 0.
-   Get it from a dump that exposes globals (OffsetDeck's full dump usually does,
-   or a Dumper-7 SDK's `GWorld`), then either:
-   ```
-   python3 tools/gen_offsets.py dump.json > fortnite-external/offsets_gen.hpp   # if globals.UWorld exists
-   ```
-   or just set `cfg::kUWorldFallback = 0x...;` in the config block.
-2. **`bRecentlyRendered` / `bIsSpectator` / `bIsDBNO` bit indices** — the dump
-   gives byte offsets for bitfields only. Defaults are `0x01` and the bit-gated
-   features are off (`kVisibleOnly = false`, `kSkipSpectators = false`,
-   `kMarkDowned = false`). Read the byte on two known states and set the mask.
-3. **`BoneArray`** — not exposed; the code walks the cached array instead, which
-   is the one the renderer fills. If you dump the real pointer, put it in
-   `off::BoneArray` and it takes priority automatically.
-
-## ESP semantics with the v43 dump
-
-- box: white = recently rendered, red = not (only meaningful when
-  `kVisibleOnly` is on), amber = DBNO (`kMarkDowned`).
-- distance is metres, from the local mesh root to the enemy root.
-- health bar: green fill, plus `m + hp` in the distance label when enabled.
+`winmm` is for `timeBeginPeriod(1)` so the 4 ms `Sleep` floor is really 4 ms.
 
 ## Build
 
-User mode (MSVC x64 developer prompt, from this folder):
+MSVC x64 Developer prompt (or `build.bat`):
 
 ```
-cl /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS fortnite_external_single.cpp /link /SUBSYSTEM:CONSOLE /OUT:fortnite_external.exe
+cl /nologo /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS ^
+   fortnite_external_single.cpp ^
+   /link /SUBSYSTEM:CONSOLE /OUT:fortnite_external.exe ^
+   d3d9.lib dwmapi.lib user32.lib gdi32.lib psapi.lib winmm.lib
 ```
 
-Kernel mode: **Empty WDM Driver** project (x64/Release) with the WDK, add the
-`.cpp`, add `_KERNEL_MODE` to preprocessor definitions, `msbuild`. The driver is
-unsigned — map it with kdmapper or equivalent.
+Regenerate after editing `fortnite_external.cpp` or the dump:
 
-`cfg::kUseCallbackDriver = false` switches reads to `OpenProcess` +
-`ReadProcessMemory` when the driver is not loaded.
+```
+python3 tools/gen_offsets.py tools/fortnite_offsets_43.00.json > fortnite-external/offsets_gen.hpp
+python3 tools/build_single.py
+```
 
-## Runtime
+## Run
 
-- `INSERT` — menu (click-through is disabled while it is open)
-- `END` — unload
-- aim key defaults to RMB, held; switchable in the Aim tab
-- per-tick mouse step is capped (`kMaxScreenStep`) so a target cannot produce a
-  screen-crossing flick
+```
+fortnite_external.exe                      # resolve UWorld in the background
+fortnite_external.exe --uworld 0x1C8E1578  # try a known GWorld offset (validated)
+fortnite_external.exe --scan               # walk the writable sections up front
+```
 
-## Verified how
+Run elevated, game windowed or borderless on the primary monitor.
 
-No MSVC/WDK on this machine, so both halves of the single file are compiled with
-g++ against fake platform headers (`tools/syntax_check.py`, `tools/syntax_check_km.py`,
-wired together in `tools/check_all.sh`). That catches type errors, bad argument
-counts, scope mistakes and missing declarations, and it did catch two:
+| key | action |
+|---|---|
+| `INSERT` | menu (opens with aimbot/visuals **off**) |
+| `END` | unload |
+| aim key (RMB default) | **held** to aim |
 
-- `Vector2(x, y)` on a struct with no such constructor — `project_world_to_screen`
-  would not have compiled anywhere.
-- `static_cast` between the distinct GDI handle types — now `reinterpret_cast`.
+Mouse deltas are only produced when: game process owns the foreground window,
+the menu is closed, `enable aimbot` is on, and the aim key is held. Camera,
+target and position are re-validated every tick; anything that fails is skipped
+rather than aimed at.
 
-It does **not** prove MSVC acceptance of the WDK specifics (`__readcr3`,
-`MmCopyIoSpaceEx`, the win32k signature) — those still need one real build.
+## What is real and what is still marked `// FILL:`
 
-## Footgun
+Real — read from the dump and asserted at compile time:
 
-This carries a kernel driver that hooks a win32k syscall — run it in a VM, and
-exclude the build folder from Defender before you build.
+| value | source |
+|---|---|
+| `World::OwningGameInstance` 0x248, `World::GameState` 0x1D0 | dump |
+| `GameStateBase::PlayerArray` 0x290 (+ Num/Max at +0x298/+0x29C) | dump |
+| `Character::Mesh` 0x2F8, `Actor::RootComponent` 0x1B0 | dump |
+| `SceneComponent::{RelativeLocation,Rotation,Scale3D,AttachParent}` | dump |
+| `FortPawn::HealthSet` 0x1430 → `FortHealthSet::{Health,MaxHealth}` | dump |
+| `FortPlayerStateAthena::TeamIndex` 0xF81 (uint8) | dump |
+| `PlayerController::PlayerCameraManager` 0x330 → `CameraCachePrivate` 0x15A0 → `POV` 0x10 | dump |
+| `MinimalViewInfo` Location 0x00 / Rotation 0x18 / FOV 0x30 | dump |
+
+Layout facts derived from the dump, not assumed — `offsets_gen.hpp` carries
+`static_assert`-style checks for each, so a dump with a different layout fails
+the build instead of skewing the math:
+
+- `Rotation - Location == 0x18` and `FOV - Rotation == 0x18` → `Location` and
+  `Rotation` are **three doubles** each (`FVector`/`FRotator`, LWC).
+- `RelativeRotation - RelativeLocation == 0x18` and `Scale3D - Rotation == 0x18`
+  → the SceneComponent relative block is double as well.
+- `DesiredFOV - FOV == 4` → **FOV is a 4-byte float.** Reading it as a double
+  would fold `DesiredFOV` into the high half. (The generated header caught this
+  while this rewrite was being written.)
+- `TeamIndex - AlwaysIncludeTeamAsAllies == 1` → TeamIndex is one byte.
+
+Still `// FILL:` — the cheat does not guess any of these:
+
+| unknown | state | how to get it |
+|---|---|---|
+| `UWorld` (GWorld static) | not in the dump; `off::UWorld = 0` | `--uworld 0x...` (validated), `--scan`, or AOB the `mov rax,[GWorld]` load. `0x1C8E1578` from the forum dump is **unverified for v43.00** — pass it and the console tells you whether validation accepted it |
+| bone array / `kBoneWorldLocations` | **off**; aim point comes from `Pawn::BaseEyeHeight - FortPawn::CapsuleHalfHeightFortPawn` over the capsule centre | `CachedBoneSpaceTransforms` is *not* assumed to be component space and *not* assumed to be `FTransform3f`. Determine stride (`0x60` vs `0x30`), space, and `NumBones` in-game, then set `kTransformStride` / `kBoneTransformsAreFloat` and flip the switch |
+| `bRecentlyRendered` bit | **off** (`kVisibleOnly = false`); box colour is neutral, not a visibility claim | byte 0x7E1 is in the dump, the bit index is not. Read it on a visible pawn and an occluded one |
+| `bIsSpectator` / `bIsDBNO` bits | not read at all | byte offsets are in the dump, bit indices are not — a wrong bit marks live players as downed/spectating |
+| `ULocalPlayer::PlayerController` | `0x30`, validated by the walk failing safely | not a reflected property. Confirm by printing `ULocalPlayer+0x00..0x80` |
+
+## UWorld resolution
+
+1. `--uworld 0x...` → validated by `looks_like_uworld()` before use.
+2. `off::UWorld` from the generated header, when a dump ships it.
+3. Bounded scan of the module's **writable** sections (PE header tells us which),
+   1 MiB per step, one step every 500 ms, never a whole-range sweep inside a
+   tick. The pointer is re-validated at most every 2 s, not every 4 ms.
+
+`looks_like_uworld()` requires four independent hops to resolve:
+`UWorld+0x248` → `GameInstance+0x38` → `UWorld+0x1D0` → `GameState+0x290`.
+Random data in `.data` does not survive that.
+
+## Verified
+
+- Compiled and linked for `x86_64-windows-gnu` with `zig c++`
+  (`python3 tools/syntax_check.py`), including the D3D9Ex path and the PE-header
+  scan. **Not** compiled with MSVC, and **not** run against the game — no
+  Windows machine and no Fortnite here. Treat every runtime number above as
+  unverified until you have run it.
