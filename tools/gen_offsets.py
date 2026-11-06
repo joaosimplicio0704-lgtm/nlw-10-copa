@@ -142,11 +142,10 @@ def main():
         "//  so a new feature never needs a regenerated header.",
         "// ---------------------------------------------------------------------------",
         "",
-        "#include <cstdint>",
+        "#include <stdint.h>",
         "",
         "namespace off",
         "{",
-        "    using std::uintptr_t;",
     ]
 
     tail = [
@@ -157,7 +156,6 @@ def main():
         "",
         "namespace sch",
         "{",
-        "    using std::uintptr_t;",
         "    struct Field { const char* name; uintptr_t offset; };",
         "    struct Struct { const char* name; const Field* fields; unsigned count; };",
         "",

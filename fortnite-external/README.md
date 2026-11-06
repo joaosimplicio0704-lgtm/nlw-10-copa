@@ -10,9 +10,14 @@ hand-edited.
 
 | file | what |
 |---|---|
-| `fortnite_external.cpp` | driver + cheat, one translation unit |
+| **`fortnite_external_single.cpp`** | **everything in one file** — driver + cheat + offsets, no local includes. This is the one to compile |
+| `fortnite_external.cpp` | same program, offsets in `offsets_gen.hpp` (easier to diff) |
 | `offsets_gen.hpp` | generated offset table (`off::` flat + `sch::` full dump) |
-| `../tools/gen_offsets.py` | generator; reads the dump JSON |
+| `../tools/gen_offsets.py` | offset generator; reads the dump JSON |
+| `../tools/build_single.py` | collapses source + offsets into the single file |
+| `../tools/syntax_check.py` | compiles the user-mode half with g++ against fake Win32/D3D9 headers |
+| `../tools/syntax_check_km.py` | same for the driver half against a fake `<ntifs.h>` |
+| `../tools/check_all.sh` | regenerate + rebuild single file + both gates |
 | `../tools/fortnite_offsets_43.00.json` | the dump this was built from (5886 fields, 240 structs) |
 | `../tools/fortnite_offsets_43.00.provenance.json` | source/version of that dump |
 
@@ -97,7 +102,7 @@ Health comes from the ability set: `FortPawn::HealthSet` 0x1430 →
 User mode (MSVC x64 developer prompt, from this folder):
 
 ```
-cl /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS fortnite_external.cpp /link /SUBSYSTEM:CONSOLE /OUT:fortnite_external.exe
+cl /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS fortnite_external_single.cpp /link /SUBSYSTEM:CONSOLE /OUT:fortnite_external.exe
 ```
 
 Kernel mode: **Empty WDM Driver** project (x64/Release) with the WDK, add the
@@ -114,6 +119,20 @@ unsigned — map it with kdmapper or equivalent.
 - aim key defaults to RMB, held; switchable in the Aim tab
 - per-tick mouse step is capped (`kMaxScreenStep`) so a target cannot produce a
   screen-crossing flick
+
+## Verified how
+
+No MSVC/WDK on this machine, so both halves of the single file are compiled with
+g++ against fake platform headers (`tools/syntax_check.py`, `tools/syntax_check_km.py`,
+wired together in `tools/check_all.sh`). That catches type errors, bad argument
+counts, scope mistakes and missing declarations, and it did catch two:
+
+- `Vector2(x, y)` on a struct with no such constructor — `project_world_to_screen`
+  would not have compiled anywhere.
+- `static_cast` between the distinct GDI handle types — now `reinterpret_cast`.
+
+It does **not** prove MSVC acceptance of the WDK specifics (`__readcr3`,
+`MmCopyIoSpaceEx`, the win32k signature) — those still need one real build.
 
 ## Footgun
 

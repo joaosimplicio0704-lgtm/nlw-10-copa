@@ -11,11 +11,10 @@
 //  so a new feature never needs a regenerated header.
 // ---------------------------------------------------------------------------
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace off
 {
-    using std::uintptr_t;
     constexpr uintptr_t GameInstance         = 0x248;  // World::OwningGameInstance
     constexpr uintptr_t LocalPlayers         = 0x38;  // GameInstance::LocalPlayers
     constexpr uintptr_t ControllerId         = 0xE8;  // LocalPlayer::ControllerId
@@ -64,7 +63,6 @@ namespace off
 
 namespace sch
 {
-    using std::uintptr_t;
     struct Field { const char* name; uintptr_t offset; };
     struct Struct { const char* name; const Field* fields; unsigned count; };
 

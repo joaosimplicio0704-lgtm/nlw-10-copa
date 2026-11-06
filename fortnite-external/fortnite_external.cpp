@@ -44,6 +44,7 @@
 #ifdef _KERNEL_MODE
 
 #include <ntifs.h>
+#include <stdint.h>
 
 #ifndef IMAGE_SCN_MEM_EXECUTE
 #define IMAGE_SCN_MEM_EXECUTE 0x20000000
@@ -130,7 +131,7 @@ namespace kmu
         char buffer[32];
         ZwQuerySystemInformation(information_class, buffer, size, &size);
 
-        PVOID info = ExAllocatePoolZero(NonPagedPool, size, 'reks');
+        PVOID info = ExAllocatePoolZero(NonPagedPool, size, 0x736B6572 /* 'reks' as ULONG */);
         if (!info) return 0;
 
         if (ZwQuerySystemInformation(information_class, info, size, &size) != STATUS_SUCCESS)
@@ -379,7 +380,7 @@ namespace kmu
 static uintptr_t* g_callback_slot = nullptr;
 static uintptr_t  g_callback_original = 0;
 
-static __int64 request_handler(uintptr_t request)
+static long long request_handler(uintptr_t request)
 {
     PDRIVER_REQUEST_LOCAL in = reinterpret_cast<PDRIVER_REQUEST_LOCAL>(request);
     switch (in->type)
@@ -638,7 +639,7 @@ public:
     }
 
 private:
-    using nt_user_fn = __int64(*)(uintptr_t);
+    using nt_user_fn = long long(*)(uintptr_t);
 
     nt_user_fn callback = nullptr;
     HANDLE     hproc    = nullptr;
@@ -767,7 +768,12 @@ namespace input
 #define M_PI 3.14159265358979323846
 #endif
 
-struct Vector2 { double x = 0, y = 0; };
+struct Vector2
+{
+    double x = 0, y = 0;
+    Vector2() = default;
+    Vector2(double _x, double _y) : x(_x), y(_y) {}
+};
 
 struct Vector3
 {
@@ -1343,13 +1349,13 @@ namespace draw
             dib = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
             if (!dib || !bits) return false;
 
-            old_bitmap = SelectObject(dc, dib);
+            old_bitmap = SelectObject(dc, reinterpret_cast<HGDIOBJ>(dib));
             memset(bits, 0, static_cast<size_t>(atlas::kWidth) * atlas::kHeight * 4);
 
             hfont = CreateFontA(px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                 OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
                                 DEFAULT_PITCH | FF_DONTCARE, face);
-            SelectObject(dc, hfont);
+            SelectObject(dc, reinterpret_cast<HGDIOBJ>(hfont));
 
             SetBkMode(dc, TRANSPARENT);
             SetTextColor(dc, RGB(255, 255, 255));
@@ -1365,13 +1371,13 @@ namespace draw
             if (dc && hfont)
             {
                 SelectObject(dc, static_cast<HGDIOBJ>(GetStockObject(SYSTEM_FONT)));
-                DeleteObject(hfont);
+                DeleteObject(reinterpret_cast<HGDIOBJ>(hfont));
                 hfont = nullptr;
             }
             if (dib)
             {
                 if (old_bitmap) SelectObject(dc, old_bitmap);
-                DeleteObject(dib);
+                DeleteObject(reinterpret_cast<HGDIOBJ>(dib));
                 dib = nullptr;
             }
             if (dc) { DeleteDC(dc); dc = nullptr; }
