@@ -1,28 +1,32 @@
 // ============================================================================
-//  fortnite_external.cpp — single-file transcription of
-//  https://github.com/xetzzy/Fortnite-External-Source
+//  fortnite_external.cpp — single-file Fortnite external, transcribed from
+//  https://github.com/xetzzy/Fortnite-External-Source and re-pointed at an
+//  OffsetDeck dump (Fortnite v43.00, UE5).
 //
 //  Original repo = km/ (WDM driver that swaps the win32k.sys NtUser callback
-//  qword for external phys-memory R/W) + um/ (D3D9Ex overlay window in the
-//  UIAccess band, ImGui menu, aimbot via spoofed NtUserSendInput, ESP).
+//  qword for external phys-memory R/W) + um/ (D3D9Ex overlay in the UIAccess
+//  band, ImGui menu, aimbot via spoofed NtUserSendInput, ESP).
 //
-//  This file is the same program with ImGui removed (it is third-party, ~57k
-//  lines). Everything the overlay needed from it — font, line/rect/text
-//  batching, a small immediate-mode menu — is reimplemented here in ~350 lines
-//  of D3D9 + a GDI glyph atlas, so the whole thing is one translation unit.
+//  This file is the same program with ImGui removed (third-party, ~57k lines).
+//  Everything the overlay used from it — font atlas, line/rect/text batching, a
+//  small immediate-mode menu — is reimplemented here in ~400 lines of D3D9, so
+//  the whole thing is one translation unit plus one generated header.
 //
 //  Compiles twice:
 //    * user mode   -> fortnite_external.exe   (default)
 //    * kernel mode -> driver                  (compile with _KERNEL_MODE, WDK)
 //
-//  UM build (MSVC x64, Developer prompt):
-//    cl /std:c++17 /O2 /EHsc /D_CRT_SECURE_NO_WARNINGS fortnite_external.cpp ^
+//  UM build (MSVC x64, Developer prompt, from this folder):
+//    cl /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS fortnite_external.cpp ^
 //       /link /SUBSYSTEM:CONSOLE /OUT:fortnite_external.exe
 //
 //  KM build: new project from the WDK "Empty WDM Driver" template (not KMDF —
 //  the driver touches no framework calls), x64/Release, add this .cpp, add
 //  _KERNEL_MODE to preprocessor definitions, then
 //    msbuild .\fortnite_external.vcxproj /p:Configuration=Release /p:Platform=x64
+//
+//  Offsets come from offsets_gen.hpp — generated, not hand-written:
+//    python3 tools/gen_offsets.py tools/fortnite_offsets_43.00.json > offsets_gen.hpp
 //
 //  Protocol between the two halves: a 48-byte DRIVER_REQUEST struct whose
 //  address is pushed into the kernel by calling NtUserRegisterErrorReportingDialog
@@ -450,45 +454,42 @@ namespace cfg
     constexpr float kFovPx         = 150.f;
     constexpr float kAimSmoothing  = 5.f;
     constexpr int   kHeadBone      = 109;
+    constexpr float kMaxScreenStep = 60.f;           // px per tick, stops snapping across the screen
     constexpr int   kRootBone      = 0;
     constexpr bool  kTeamCheck     = true;
-    constexpr bool  kVisibleOnly   = true;           // aim only at meshes passing the render-time check
+    // OffsetDeck gives byte offsets for bitfields but no bit index, so anything
+    // gated on a bit reads whole-byte by default and the bit checks are opt-in.
+    constexpr bool  kVisibleOnly   = false;          // aim only at recently-rendered meshes
+    constexpr bool  kSkipSpectators = false;
+    constexpr bool  kMarkDowned    = false;
+
+    // FILL: bRecentlyRendered bit inside the byte at off::RecentlyRendered (0x7E1).
+    //       Dump it: read that byte on a visible enemy vs an occluded one.
+    constexpr uint8_t kRecentlyRenderedBit = 0x01;   // used only when kVisibleOnly
+    // FILL: bIsSpectator bit inside the byte at off::bIsSpectator (PlayerState 0x282)
+    constexpr uint8_t bIsSpectatorBit      = 0x01;
+    // FILL: bIsDBNO bit inside the byte at off::bIsDBNO (FortPawn 0x892)
+    constexpr uint8_t bIsDBNOBit           = 0x01;
 
     constexpr bool  kUseCallbackDriver = true;       // false -> OpenProcess/ReadProcessMemory fallback
     constexpr bool  kUseSpoofedInput   = true;       // false -> plain SendInput
     constexpr bool  kTryUiAccessBand   = true;       // requires a signed binary in a trusted path
     constexpr int   kFontPx            = 14;
+
+    // GWorld offset, second chance if offsets_gen.hpp still has off::UWorld = 0.
+    // Get it from a fresh dump: globals.UWorld in an OffsetDeck export, or from
+    // a Fortnite SDK dump's "GWorld" entry.
+    constexpr uintptr_t kUWorldFallback = 0x0;   // FILL: GWorld offset for this patch
 }
 
 // ---------------------------------------------------------------------------
-//  OFFSETS — um/offsets.hpp, season they were taken from (early 2023).
-//  Refresh per patch from a Fortnite dump (Dumper-7 / community offsets):
-//  UWorld shifts every update, the struct offsets below rarely move.
+//  OFFSETS — generated from an OffsetDeck Fortnite dump (v43.00), see
+//  tools/gen_offsets.py. Regenerate per patch, don't hand-edit offsets_gen.hpp.
+//
+//  `sch::table` keeps the full dump (240 structs, ~5900 fields) so new features
+//  can pull a field by name at runtime instead of regenerating the header.
 // ---------------------------------------------------------------------------
-namespace off
-{
-    constexpr uintptr_t UWorld                 = 0x10AEC0B8;
-    constexpr uintptr_t GameInstance           = 0x1B8;
-    constexpr uintptr_t LocalPlayers           = 0x38;
-    constexpr uintptr_t PlayerController       = 0x30;
-    constexpr uintptr_t LocalPawn              = 0x338;
-    constexpr uintptr_t PawnPrivate            = 0x308;
-    constexpr uintptr_t RootComponent          = 0x198;
-    constexpr uintptr_t RelativeLocation       = 0x128;
-    constexpr uintptr_t PlayerState            = 0x2B0;
-    constexpr uintptr_t TeamIndex              = 0x10E0;
-    constexpr uintptr_t GameState              = 0x158;
-    constexpr uintptr_t PlayerArray            = 0x2A8;
-    constexpr uintptr_t Mesh                   = 0x318;
-    constexpr uintptr_t ComponentToWorld       = 0x240;
-    constexpr uintptr_t BoneArray              = 0x610;
-    constexpr uintptr_t BoneArrayCache         = 0x620;
-    constexpr uintptr_t LastSubmitTime         = 0x368;
-    constexpr uintptr_t LastSubmitTimeOnScreen = 0x370;
-    constexpr uintptr_t CameraFov              = 0x394;   // player controller, * 90 = degrees
-    constexpr uintptr_t CameraLocation         = 0x110;   // uworld
-    constexpr uintptr_t CameraRotation         = 0x120;   // uworld
-}
+#include "offsets_gen.hpp"
 
 // ---------------------------------------------------------------------------
 //  settings (um/settings.hpp)
@@ -518,6 +519,7 @@ namespace settings
         inline bool fill_box = false;
         inline bool line     = false;
         inline bool distance = false;
+        inline bool health_bar = false;
     }
 }
 
@@ -787,13 +789,16 @@ struct Vector3
 
 struct FQuat { double x, y, z, w; };
 
+// UE5 LWC: FQuat is double[4], FVector is double[3], so FTransform =
+// 32 (rot) + 24 (translation) + 8 (pad to 16) + 24 (scale) + 8 (pad) = 0x60.
+// FTransform3f (float path used by the renderer's cached bone arrays) = 0x30.
 struct FTransform
 {
-    FQuat   rot;
-    Vector3 translation;
-    char    pad[4];
-    Vector3 scale;
-    char    pad1[4];
+    FQuat   rot;          // 0x00
+    Vector3 translation;  // 0x20
+    char    pad[8];       // 0x38
+    Vector3 scale;        // 0x40
+    char    pad1[8];      // 0x58
 
     D3DMATRIX to_matrix_with_scale() const
     {
@@ -884,20 +889,90 @@ inline D3DMATRIX rotation_matrix(const Vector3& rot, const Vector3& origin = Vec
     return m;
 }
 
+inline D3DMATRIX identity_matrix()
+{
+    D3DMATRIX m{};
+    m._11 = m._22 = m._33 = m._44 = 1.f;
+    return m;
+}
+
+// FVector3f read into a double Vector3 (the dump's world fields are float even
+// in UE5 — only the double-precision actor locations are LWC)
+inline Vector3 read_vector3f(uintptr_t address)
+{
+    return Vector3(mem.read<float>(address),
+                   mem.read<float>(address + 4),
+                   mem.read<float>(address + 8));
+}
+
+inline bool valid_vector(const Vector3& v)
+{
+    // reject NaN/denormals and anything outside the playable world box
+    const double limit = 200000.0;
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
+           fabs(v.x) < limit && fabs(v.y) < limit && fabs(v.z) < limit;
+}
+
+// SceneComponent local transform (relative loc / rot / scale) as a matrix,
+// column-vector convention to match D3D row-major storage.
+inline D3DMATRIX local_transform_matrix(const Vector3& location, const Vector3& rotation, const Vector3& scale)
+{
+    D3DMATRIX out = rotation_matrix(rotation);
+    out._11 = static_cast<float>(out._11 * scale.x);
+    out._12 = static_cast<float>(out._12 * scale.x);
+    out._13 = static_cast<float>(out._13 * scale.x);
+    out._21 = static_cast<float>(out._21 * scale.y);
+    out._22 = static_cast<float>(out._22 * scale.y);
+    out._23 = static_cast<float>(out._23 * scale.y);
+    out._31 = static_cast<float>(out._31 * scale.z);
+    out._32 = static_cast<float>(out._32 * scale.z);
+    out._33 = static_cast<float>(out._33 * scale.z);
+    out._41 = static_cast<float>(location.x);
+    out._42 = static_cast<float>(location.y);
+    out._43 = static_cast<float>(location.z);
+    return out;
+}
+
+// Bone array. OffsetDeck does not expose `BoneArray`, only
+// SkeletalMeshComponent::CachedBoneSpaceTransforms (0x9B8), which the renderer
+// fills with FTransform3f (float, 0x30 stride). If you dump the real bone array
+// pointer, drop it into off::BoneArray and it wins over the cache path.
+inline D3DMATRIX cached_bone_matrix(uintptr_t mesh, int bone_id)
+{
+    if (!mesh) return identity_matrix();
+
+    uintptr_t bones = off::BoneArray ? mem.read<uintptr_t>(mesh + off::BoneArray) : 0;
+    uintptr_t stride = 0x30;
+    if (!bones)
+    {
+        bones = mem.read<uintptr_t>(mesh + off::BoneSpaceTransforms);
+        stride = 0x30;
+    }
+    if (!bones) return identity_matrix();
+
+    const uintptr_t at = bones + static_cast<uintptr_t>(bone_id) * stride;
+
+    // FTransform3f: quat 0x00 (16B), translation 0x10 (12B), scale 0x20 (12B)
+    FTransform bone{};
+    bone.rot.x         = mem.read<float>(at + 0x00);
+    bone.rot.y         = mem.read<float>(at + 0x04);
+    bone.rot.z         = mem.read<float>(at + 0x08);
+    bone.rot.w         = mem.read<float>(at + 0x0C);
+    bone.translation.x = mem.read<float>(at + 0x10);
+    bone.translation.y = mem.read<float>(at + 0x14);
+    bone.translation.z = mem.read<float>(at + 0x18);
+    bone.scale.x       = mem.read<float>(at + 0x20);
+    bone.scale.y       = mem.read<float>(at + 0x24);
+    bone.scale.z       = mem.read<float>(at + 0x28);
+
+    return bone.to_matrix_with_scale();
+}
+
 struct Camera
 {
     Vector3 location;
-    Vector3 rotation;
+    Vector3 rotation;   // pitch, yaw, roll in degrees
     float   fov = 90.f;
-};
-
-struct FNRot
-{
-    double a;
-    char   pad_0008[24];
-    double b;
-    char   pad_0028[424];
-    double c;
 };
 
 namespace cache
@@ -907,7 +982,7 @@ namespace cache
     inline uintptr_t local_players = 0;
     inline uintptr_t player_controller = 0;
     inline uintptr_t local_pawn = 0;
-    inline uintptr_t root_component = 0;
+    inline uintptr_t local_root = 0;
     inline uintptr_t player_state = 0;
     inline uintptr_t game_state = 0;
     inline uintptr_t player_array = 0;
@@ -922,28 +997,45 @@ namespace cache
     inline Camera    camera;   // refreshed once per tick, not once per projection
 }
 
+// The one number the dump does not ship: GWorld (the UWorld**) base offset in
+// FortniteClient-Win64-Shipping.exe. It changes every patch.
+inline uintptr_t resolve_uworld()
+{
+    const uintptr_t from_base = mem.read<uintptr_t>(mem.base + off::UWorld);
+    if (from_base) return from_base;
+
+    const uintptr_t from_image = mem.read<uintptr_t>(mem.base + cfg::kUWorldFallback);
+    if (from_image) return from_image;
+
+    return 0;
+}
+
+// Camera comes from APlayerCameraManager::CameraCachePrivate (FCameraCacheEntry),
+// whose first member after the timestamp is FMinimalViewInfo POV at +0x10:
+//   POV+0x00 FVector Location, POV+0x18 FRotator Rotation, POV+0x30 float FOV.
+// This replaces the original source's UWorld+0x110/0x120 double-matrix hack,
+// which does not exist with the same layout in UE5.
 inline Camera get_view_point()
 {
     Camera view{};
 
-    const uintptr_t location_ptr = mem.read<uintptr_t>(cache::uworld + off::CameraLocation);
-    const uintptr_t rotation_ptr = mem.read<uintptr_t>(cache::uworld + off::CameraRotation);
-    if (!location_ptr || !rotation_ptr) return view;
+    if (!cache::player_controller) return view;
 
-    FNRot fnrot{};
-    fnrot.a = mem.read<double>(rotation_ptr);
-    fnrot.b = mem.read<double>(rotation_ptr + 0x20);
-    fnrot.c = mem.read<double>(rotation_ptr + 0x1D0);
+    const uintptr_t camera_manager = mem.read<uintptr_t>(cache::player_controller + off::PlayerCameraManager);
+    if (!camera_manager) return view;
 
-    view.location = mem.read<Vector3>(location_ptr);
-    view.rotation.x = asin(fnrot.c) * (180.0 / M_PI);
-    view.rotation.y = atan2(-fnrot.a, fnrot.b) * (180.0 / M_PI);
-    view.rotation.z = 0.0;
+    const uintptr_t cache_entry = camera_manager + off::CameraCachePrivate;
+    const uintptr_t pov = cache_entry + off::CameraPOV;
 
-    if (cache::player_controller)
-        view.fov = mem.read<float>(cache::player_controller + off::CameraFov) * 90.f;
-    if (!(view.fov > 1.f && view.fov < 180.f)) view.fov = 90.f;
+    const Vector3 location = read_vector3f(pov + off::CameraLocation);
+    const Vector3 rotation = read_vector3f(pov + off::CameraRotation);   // pitch, yaw, roll
+    float fov = mem.read<float>(pov + off::CameraFOV);
 
+    if (!(fov > 1.f && fov < 180.f)) fov = 90.f;
+
+    view.location = location;
+    view.rotation = rotation;
+    view.fov = fov;
     return view;
 }
 
@@ -965,28 +1057,63 @@ inline Vector2 project_world_to_screen(const Vector3& world)
                    settings::center_y - transformed.y * f);
 }
 
-inline Vector3 get_entity_bone(uintptr_t mesh, int bone_id)
+// ComponentToWorld is private in this dump (SceneComponent exposes only the
+// relative transform + AttachParent), so the world transform is rebuilt by
+// walking up the attach chain and composing:
+//   world = parent_world * local(relative loc/rot/scale)
+// Depth-capped because a broken AttachParent link reads as garbage, and the
+// cheap range checks below reject those instead of letting NaN into the W2S.
+inline D3DMATRIX build_component_to_world(uintptr_t component)
 {
-    if (!mesh) return Vector3();
+    D3DMATRIX world = identity_matrix();
 
-    uintptr_t bone_array = mem.read<uintptr_t>(mesh + off::BoneArray);
-    if (!bone_array) bone_array = mem.read<uintptr_t>(mesh + off::BoneArrayCache);
-    if (!bone_array) return Vector3();
+    D3DMATRIX chain[16];
+    int depth = 0;
+    uintptr_t current = component;
 
-    const FTransform bone = mem.read<FTransform>(bone_array + (bone_id * 0x60));
-    const FTransform component_to_world = mem.read<FTransform>(mesh + off::ComponentToWorld);
+    while (current && depth < 16)
+    {
+        // FRotator = 3 floats (pitch, yaw, roll); FVector = 3 floats
+        const Vector3 loc   = read_vector3f(current + off::RelativeLocation);
+        const Vector3 rot   = read_vector3f(current + off::RelativeRotation);
+        const Vector3 scale = read_vector3f(current + off::RelativeScale3D);
 
-    const D3DMATRIX matrix = matrix_multiplication(bone.to_matrix_with_scale(),
-                                                   component_to_world.to_matrix_with_scale());
-    return Vector3(matrix._41, matrix._42, matrix._43);
+        if (!valid_vector(loc) || !valid_vector(scale)) break;
+
+        chain[depth++] = local_transform_matrix(loc, rot, scale);
+        current = mem.read<uintptr_t>(current + off::AttachParent);
+    }
+
+    for (int i = depth - 1; i >= 0; --i)
+        world = matrix_multiplication(chain[i], world);
+
+    return world;
 }
 
+inline Vector3 bone_world_location(uintptr_t mesh, int bone_id)
+{
+    if (!mesh || bone_id < 0) return Vector3();
+
+    const D3DMATRIX bone_to_component = cached_bone_matrix(mesh, bone_id);
+    const D3DMATRIX component_to_world = build_component_to_world(mesh);
+
+    const D3DMATRIX world = matrix_multiplication(bone_to_component, component_to_world);
+    const Vector3 out(world._41, world._42, world._43);
+
+    return valid_vector(out) ? out : Vector3();
+}
+
+// alias kept so the original source's naming still reads the same
+inline Vector3 get_entity_bone(uintptr_t mesh, int bone_id) { return bone_world_location(mesh, bone_id); }
+
+// bRecentlyRendered is the dump's replacement for LastSubmitTime /
+// LastRenderTimeOnScreen (those moved to private PrimitiveComponent::SceneProxy
+// bookkeeping). It is a bitfield, one bit at 0x7E1.
 inline bool is_visible(uintptr_t mesh)
 {
     if (!mesh) return false;
-    const float last_submit  = mem.read<float>(mesh + off::LastSubmitTime);
-    const float last_on_screen = mem.read<float>(mesh + off::LastSubmitTimeOnScreen);
-    return last_on_screen + 0.06f >= last_submit;
+    const uint8_t flags = mem.read<uint8_t>(mesh + off::RecentlyRendered);
+    return (flags & cfg::kRecentlyRenderedBit) != 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1688,13 +1815,27 @@ inline void aimbot(uintptr_t target_mesh)
     if (!target_mesh) return;
     if (cfg::kVisibleOnly && !is_visible(target_mesh)) return;
 
-    const Vector3 head3d = get_entity_bone(target_mesh, cfg::kHeadBone);
+    const Vector3 head3d = bone_world_location(target_mesh, cfg::kHeadBone);
+    if (!valid_vector(head3d)) return;
+
     const Vector2 head2d = project_world_to_screen(head3d);
     if (head2d.x == 0 && head2d.y == 0) return;
 
-    const double smooth = (settings::aimbot::smoothness > 0.1f) ? settings::aimbot::smoothness : 1.0;
-    const double dx = (head2d.x - settings::center_x) / smooth;
-    const double dy = (head2d.y - settings::center_y) / smooth;
+    // gain = 1/smoothness, then the per-tick step is capped so a target that
+    // teleports across the screen never produces a 300px mouse jump.
+    const float smoothness = settings::aimbot::smoothness > 0.1f ? settings::aimbot::smoothness : 1.f;
+    const double gain = 1.0 / smoothness;
+
+    double dx = (head2d.x - settings::center_x) * gain;
+    double dy = (head2d.y - settings::center_y) * gain;
+
+    const double step = sqrt(dx * dx + dy * dy);
+    if (step > cfg::kMaxScreenStep)
+    {
+        const double scale = cfg::kMaxScreenStep / step;
+        dx *= scale;
+        dy *= scale;
+    }
 
     input::move_mouse(dx, dy);
 }
@@ -1710,37 +1851,53 @@ inline void game_tick()
 {
     if (!mem.alive()) return;
 
-    cache::uworld = mem.read<uintptr_t>(mem.base + off::UWorld);
+    cache::uworld = resolve_uworld();
     if (!cache::uworld) return;
 
     cache::game_instance = mem.read<uintptr_t>(cache::uworld + off::GameInstance);
     if (!cache::game_instance) return;
 
-    cache::local_players = mem.read<uintptr_t>(mem.read<uintptr_t>(cache::game_instance + off::LocalPlayers));
+    // UGameInstance::LocalPlayers is a TArray<ULocalPlayer*>: data ptr, then Num.
+    const uintptr_t local_players_array = mem.read<uintptr_t>(cache::game_instance + off::LocalPlayers);
+    if (!local_players_array) return;
+
+    cache::local_players = mem.read<uintptr_t>(local_players_array);
     if (!cache::local_players) return;
 
-    cache::player_controller = mem.read<uintptr_t>(cache::local_players + off::PlayerController);
+    // ULocalPlayer::PlayerController is not reflected, sits at +0x30.
+    cache::player_controller = mem.read<uintptr_t>(cache::local_players + off::LocalPlayerController);
+    if (!cache::player_controller) return;
+
     cache::local_pawn = mem.read<uintptr_t>(cache::player_controller + off::LocalPawn);
 
     if (cache::local_pawn)
     {
-        cache::root_component = mem.read<uintptr_t>(cache::local_pawn + off::RootComponent);
-        if (cache::root_component)
-            cache::relative_location = mem.read<Vector3>(cache::root_component + off::RelativeLocation);
+        // own position off the root component's relative transform: cheaper than
+        // the bone path and valid without a bone array
+        const uintptr_t root = mem.read<uintptr_t>(cache::local_pawn + off::RootComponent);
+        cache::local_root = root;
+
+        if (root)
+        {
+            cache::relative_location = read_vector3f(root + off::RelativeLocation);
+            if (!valid_vector(cache::relative_location)) cache::relative_location = Vector3();
+        }
 
         cache::player_state = mem.read<uintptr_t>(cache::local_pawn + off::PlayerState);
         if (cache::player_state)
-            cache::my_team_id = mem.read<int>(cache::player_state + off::TeamIndex);
+            cache::my_team_id = mem.read<uint8_t>(cache::player_state + off::TeamIndex);
     }
 
     cache::game_state = mem.read<uintptr_t>(cache::uworld + off::GameState);
     if (!cache::game_state) return;
 
+    // TArray<APlayerState*> at GameStateBase::PlayerArray
     cache::player_array = mem.read<uintptr_t>(cache::game_state + off::PlayerArray);
     cache::player_count = mem.read<int>(cache::game_state + off::PlayerArray + sizeof(uintptr_t));
     if (!cache::player_array || cache::player_count <= 0 || cache::player_count > 256) return;
 
     cache::camera = get_view_point();
+    if (!valid_vector(cache::camera.location)) return;
 
     cache::closest_distance = FLT_MAX;
     cache::closest_mesh = 0;
@@ -1750,25 +1907,49 @@ inline void game_tick()
         const uintptr_t player_state = mem.read<uintptr_t>(cache::player_array + (i * sizeof(uintptr_t)));
         if (!player_state) continue;
 
-        if (cfg::kTeamCheck)
+        if (cfg::kSkipSpectators)
         {
-            const int team = mem.read<int>(player_state + off::TeamIndex);
-            if (team == cache::my_team_id) continue;
+            // bIsSpectator shares its byte with bIsABot/bIsInactive/bIsInactive
+            const uint8_t pstate_flags = mem.read<uint8_t>(player_state + off::bIsSpectator);
+            if (pstate_flags & cfg::bIsSpectatorBit) continue;
         }
+
+        const int team = mem.read<int>(player_state + off::TeamIndex) & 0xFF;
+        if (cfg::kTeamCheck && team == cache::my_team_id) continue;
 
         const uintptr_t pawn = mem.read<uintptr_t>(player_state + off::PawnPrivate);
         if (!pawn || pawn == cache::local_pawn) continue;
 
+        // DBNO pawns stay valid targets, just drawn amber when the bit is known
+        bool downed = false;
+        if (cfg::kMarkDowned)
+        {
+            const uint8_t pawn_flags = mem.read<uint8_t>(pawn + off::bIsDBNO);
+            downed = (pawn_flags & cfg::bIsDBNOBit) != 0;
+        }
+
         const uintptr_t mesh = mem.read<uintptr_t>(pawn + off::Mesh);
         if (!mesh) continue;
 
-        const Vector2 head2d = project_world_to_screen(get_entity_bone(mesh, cfg::kHeadBone));
-        const Vector3 bottom3d = get_entity_bone(mesh, cfg::kRootBone);
+        const Vector3 head3d = bone_world_location(mesh, cfg::kHeadBone);
+        const Vector3 bottom3d = bone_world_location(mesh, cfg::kRootBone);
+        if (!valid_vector(head3d) || !valid_vector(bottom3d)) continue;
+
+        const Vector2 head2d = project_world_to_screen(head3d);
         const Vector2 bottom2d = project_world_to_screen(bottom3d);
 
         const float box_height = static_cast<float>(fabs(head2d.y - bottom2d.y));
         const float box_width = box_height * 0.50f;
         const float distance = static_cast<float>(cache::relative_location.distance(bottom3d)) / 100.f;
+
+        // health out of the ability system set: UFORTHealthSet { Health 0x48, MaxHealth 0x70 }
+        float hp = 0.f, max_hp = 0.f;
+        const uintptr_t health_set = mem.read<uintptr_t>(pawn + off::HealthSet);
+        if (health_set)
+        {
+            hp = mem.read<float>(health_set + off::Health);
+            max_hp = mem.read<float>(health_set + off::MaxHealth);
+        }
 
         const bool visible = is_visible(mesh);
 
@@ -1777,20 +1958,45 @@ inline void game_tick()
             const float bx = static_cast<float>(head2d.x) - box_width * 0.5f;
             const float by = static_cast<float>(head2d.y);
 
+            const DWORD box_color = downed    ? D3DCOLOR_ARGB(255, 240, 200, 60)
+                                  : visible   ? D3DCOLOR_ARGB(255, 245, 245, 245)
+                                              : D3DCOLOR_ARGB(255, 240, 60, 60);
+
             if (settings::visuals::box)
-                draw::cornered_box(bx, by, box_width, box_height,
-                                   visible ? D3DCOLOR_ARGB(255, 245, 245, 245) : D3DCOLOR_ARGB(255, 240, 60, 60), 1.f);
+                draw::cornered_box(bx, by, box_width, box_height, box_color, 1.f);
 
             if (settings::visuals::fill_box)
                 draw::rect_filled(bx, by, box_width, box_height, D3DCOLOR_ARGB(45, 0, 0, 0));
 
+            if (settings::visuals::health_bar && max_hp > 0.f && hp > 0.f)
+            {
+                const float frac = (hp / max_hp) > 1.f ? 1.f : (hp / max_hp);
+                draw::rect_filled(bx - 5.f, by, 3.f, box_height, D3DCOLOR_ARGB(120, 0, 0, 0));
+                draw::rect_filled(bx - 5.f, by + box_height * (1.f - frac), 3.f, box_height * frac,
+                                  D3DCOLOR_ARGB(255, 90, 220, 120));
+            }
+
             if (settings::visuals::line)
                 draw::line(static_cast<float>(settings::center_x), static_cast<float>(settings::height),
-                           static_cast<float>(bottom2d.x), static_cast<float>(bottom2d.y),
-                           visible ? D3DCOLOR_ARGB(255, 245, 245, 245) : D3DCOLOR_ARGB(255, 240, 60, 60), 1.f);
+                           static_cast<float>(bottom2d.x), static_cast<float>(bottom2d.y), box_color, 1.f);
 
             if (settings::visuals::distance)
-                draw_distance_label(bottom2d, distance);
+            {
+                char label[64];
+                snprintf(label, sizeof(label), "%.0fm", distance);
+                if (settings::visuals::health_bar && max_hp > 0.f)
+                {
+                    char with_hp[96];
+                    snprintf(with_hp, sizeof(with_hp), "%.0fm  %.0fhp", distance, hp);
+                    draw::text_centered(static_cast<float>(bottom2d.x), static_cast<float>(bottom2d.y),
+                                        D3DCOLOR_ARGB(255, 240, 240, 240), with_hp);
+                }
+                else
+                {
+                    draw::text_centered(static_cast<float>(bottom2d.x), static_cast<float>(bottom2d.y),
+                                        D3DCOLOR_ARGB(255, 240, 240, 240), label);
+                }
+            }
         }
 
         if (cfg::kVisibleOnly && !visible) continue;
@@ -1872,9 +2078,10 @@ inline void render_menu()
         ui::checkbox(x, y, "filled box", &settings::visuals::fill_box);    y += 24.f;
         ui::checkbox(x, y, "snaplines", &settings::visuals::line);         y += 24.f;
         ui::checkbox(x, y, "distance", &settings::visuals::distance);      y += 24.f;
+        ui::checkbox(x, y, "health bar + hp", &settings::visuals::health_bar); y += 24.f;
 
         draw::text(x, y + 6.f, ui::kColTextDim,
-                   settings::visuals::enable ? "white = visible, red = occluded" : "");
+                   settings::visuals::enable ? "white = visible, red = occluded, amber = downed" : "");
     }
     else
     {

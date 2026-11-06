@@ -1,0 +1,22 @@
+{
+  "item": {
+    "source": "OffsetDeck",
+    "game": "fortnite",
+    "title": "Fortnite",
+    "platform": "Windows",
+    "url": "https://alloffsets.lovable.app/api/public/v1/games/fortnite",
+    "page": "https://alloffsets.lovable.app/api/public/v1/games/fortnite",
+    "hint": {}
+  },
+  "version": "43.00",
+  "revision": "1",
+  "dated": "2026-11-06T03:28:21.320Z",
+  "links": {
+    "Dump completo": "https://alloffsets.lovable.app/api/public/v1/games/fortnite",
+    "Fonte": "https://alloffsets.lovable.app/"
+  },
+  "count": 5886,
+  "notice": "Compatibilidade com o jogo não testada.",
+  "digest": "69b017e89e93b105ac40afb7c51a02012531db8d8fa8ad14106ea2a2082f2595",
+  "aviso": "Dados públicos da fonte indicada; compatibilidade não testada. Preserve os créditos e a licença do projeto."
+}
