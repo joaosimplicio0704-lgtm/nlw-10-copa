@@ -64,7 +64,9 @@ fortnite_external.exe --uworld 0x1C8E1578  # try a known GWorld offset (validate
 fortnite_external.exe --scan               # walk the writable sections up front
 ```
 
-Run elevated, game windowed or borderless on the primary monitor.
+Run elevated, game windowed or borderless on the primary monitor. **Start it with
+a match loaded** if you can: the layout probe needs a live pawn, and until it
+succeeds no world position is trusted (the Misc tab says `layout: UNRESOLVED`).
 
 | key | action |
 |---|---|
@@ -118,6 +120,7 @@ Still `// FILL:` — the cheat does not guess any of these:
 | unknown | state | how to get it |
 |---|---|---|
 | `UWorld` (GWorld static) | not in the dump; `off::UWorld = 0` | `--uworld 0x...` (validated), `--scan`, or AOB the `mov rax,[GWorld]` load. `0x1C8E1578` from the forum dump is **unverified for v43.00** — pass it and the console tells you whether validation accepted it |
+| relative-block **width** (float32 vs float64) | **probed at runtime**, not assumed | the dump only states the 0x18 spacing, which both layouts satisfy. `probe_vec_layout()` scores translation + rotator + scale on the local pawn's root component and picks the layout that reads as a real transform; the verdict prints at startup (`relative block: float32/float64`) and shows on the Misc tab. Until it resolves, aim/ESP stay off |
 | bone array / `kBoneWorldLocations` | **off**; aim point comes from `Pawn::BaseEyeHeight - FortPawn::CapsuleHalfHeightFortPawn` over the capsule centre | `CachedBoneSpaceTransforms` is *not* assumed to be component space and *not* assumed to be `FTransform3f`. Determine stride (`0x60` vs `0x30`), space, and `NumBones` in-game, then set `kTransformStride` / `kBoneTransformsAreFloat` and flip the switch |
 | `bRecentlyRendered` bit | **off** (`kVisibleOnly = false`); box colour is neutral, not a visibility claim | byte 0x7E1 is in the dump, the bit index is not. Read it on a visible pawn and an occluded one |
 | `bIsSpectator` / `bIsDBNO` bits | not read at all | byte offsets are in the dump, bit indices are not — a wrong bit marks live players as downed/spectating |
@@ -145,3 +148,6 @@ Random data in `.data` does not survive that.
 - Projection maths verified numerically (`python3 tools/check_math.py`): the
   rotator basis is a proper rotation and the W2S invariants hold at six camera
   orientations, including roll and negative pitch.
+- The `float32` / `float64` question for the relative block and the camera POV is
+  no longer a guess: it is probed against live memory and reported. The camera
+  additionally refuses to project if neither layout describes the POV it read.

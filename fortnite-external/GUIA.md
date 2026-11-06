@@ -138,7 +138,9 @@ cl /std:c++17 /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS fortnite_external_single.c
 
 Ordem de execução:
 
-1. abre o Fortnite e chega no **lobby** (ou num modo offline/criativo)
+1. abre o Fortnite e **entra numa partida** (criativo/offline serve). O programa
+   precisa de um pawn vivo pra descobrir se as posições são float ou double; no
+   lobby ele fica com `layout: UNRESOLVED` e não mira nem desenha
 2. clica com o botão direito no `fortnite_external.exe` → **Executar como administrador**
    (sem admin, o `OpenProcess` falha)
 3. uma janela de console abre e escreve:
@@ -148,7 +150,14 @@ Ordem de execução:
 [*] base 0x7FF6XXXXXXXX  pid 25184
 [*] UWorld scan prepared: 6 writable section(s), 41.3 MiB total
 [*] UWorld resolved by scan: base+0x10AEC0B8 -> 0x1F2A...
+[*] relative block: float32 (3 floats + 4 pad per 0x18 slot)
 ```
+
+a linha `relative block` é a que resolve o dúvida que estava no código: o dump dá
+o espaçamento (0x18) mas não diz se são 3 floats ou 3 doubles. Agora ele testa
+nos dois formatos em cima do pawn local e usa o que der um transform coerente.
+se aparecer `UNRESOLVED`, você está no lobby — entra na partida que ele resolve
+sozinho em ~1 s.
 
 Se você já tem o offset do GWorld pra esse patch, passe na linha de comando — ele é
 validado antes de ser aceito:
