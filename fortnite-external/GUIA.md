@@ -94,6 +94,31 @@ Bloco de Notas e troca as duas linhas `<PlatformToolset>v143</PlatformToolset>` 
 estiver instalado, seja 2022, 2019 ou o preview.
 (o `.vcxproj` que veio no zip do repo novo já vem assim.)
 
+### O erro `MSB8020` insiste mesmo depois de instalar o v143
+
+O `.vcxproj` que veio do repo antigo **exigia** `v143` fixo. A versão nova do projeto
+não tem mais essa linha: sem `PlatformToolset`, o VS/MSBuild usa o toolset mais novo
+que estiver instalado, e o erro não tem como acontecer.
+
+Se ainda estiver vendo `MSB8020`, você está com o `.vcxproj` antigo na pasta:
+
+1. fecha o Visual Studio
+2. baixa de novo `fortnite_external.vcxproj` (ou o zip novo) e **substitui** o arquivo
+3. abre o `.sln` de novo
+4. confere: no Bloco de Notas, o `.vcxproj` **não** deve ter nenhuma linha `PlatformToolset`
+
+### Opção D — `build.bat` (sem Visual Studio aberto)
+
+Na pasta tem um `build.bat`. Ele acha o `vcvars64.bat` do seu VS (2022/2019/2017,
+qualquer edição), compila e deixa o `.exe` ao lado:
+
+1. duplo clique em **`build.bat`**
+2. se aparecer `[1/3] ... usando: C:\Program Files\...\vcvars64.bat` está no caminho certo
+3. no fim: `[3/3] pronto: ...\fortnite_external.exe`
+
+Se ele disser que não achou o Visual Studio, o componente C++ não está instalado
+de verdade (Visual Studio Installer → Modificar → *Desenvolvimento para desktop com C++*).
+
 ### Opção C — linha de comando (sem IDE)
 
 Menu Iniciar → **x64 Native Tools Command Prompt for VS 2022** (tem que ser esse, não o `cmd`):
