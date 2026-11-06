@@ -101,6 +101,10 @@ def main():
     result = subprocess.run([sys.executable, gate, OUT], capture_output=True, text=True)
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
+
+    if result.returncode == 3:
+        print("compile gate SKIPPED — file written, NOT compiled (no cross compiler here)")
+        return 0
     if result.returncode != 0:
         print("compile gate FAILED", file=sys.stderr)
         return 1

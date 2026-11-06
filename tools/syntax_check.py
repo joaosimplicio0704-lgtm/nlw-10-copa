@@ -50,9 +50,11 @@ def main():
 
     cc = find_compiler()
     if not cc:
-        print("error: neither zig nor mingw-w64 g++ found; cannot verify the build",
+        # Not a failure of the source, a missing toolchain. Exit 3 so callers can
+        # say "not verified" instead of "passed".
+        print("SKIPPED — no zig and no mingw-w64 g++ here, the source was NOT compiled",
               file=sys.stderr)
-        return 1
+        return 3
 
     out = os.path.join(ROOT, "tools", f".gate_{os.getpid()}.obj" if obj_only
                        else f".gate_{os.getpid()}.exe")

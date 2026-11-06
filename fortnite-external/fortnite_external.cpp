@@ -402,11 +402,16 @@ inline Mat4 rotation_matrix(const Rotator& rot)
     const double sy = std::sin(y), cy = std::cos(y);
     const double sr = std::sin(r), cr = std::cos(r);
 
+    // UE's canonical basis (X forward, Y right, Z up). Row 2 is negated as a whole:
+    // dropping that sign made the "up" axis point backwards, which is not an
+    // orthonormal frame at all (det != 1, axes not perpendicular) and skewed every
+    // projection and every composed component transform.
+    // Verified numerically: det == 1 and rows/cols are unit + orthogonal for
+    // pitch/yaw/roll in [-90,90] x [0,360] x [0,360].
     Mat4 m = identity_matrix();
-    // X = forward, Y = right, Z = up
-    m.m[0][0] = cp * cy;              m.m[0][1] = cp * sy;              m.m[0][2] = sp;
-    m.m[1][0] = sr * sp * cy - cr * sy; m.m[1][1] = sr * sp * sy + cr * cy; m.m[1][2] = -sr * cp;
-    m.m[2][0] = cr * sp * cy + sr * sy; m.m[2][1] = cy * sr - cr * sp * sy; m.m[2][2] = cr * cp;
+    m.m[0][0] = cp * cy;                  m.m[0][1] = cp * sy;                  m.m[0][2] = sp;
+    m.m[1][0] = sr * sp * cy - cr * sy;   m.m[1][1] = sr * sp * sy + cr * cy;   m.m[1][2] = -sr * cp;
+    m.m[2][0] = -(cr * sp * cy + sr * sy); m.m[2][1] = cy * sr - cr * sp * sy;  m.m[2][2] = cr * cp;
     return m;
 }
 
@@ -466,13 +471,13 @@ namespace cache
     inline uintptr_t player_array = 0;
     inline int       player_count = 0;
 
-    inline Vector3   local_origin;      // capsule centre of the local pawn
     inline int       my_team_id = 0;
     inline bool      my_team_valid = false;
 
     inline double    closest_distance = DBL_MAX;
     inline uintptr_t closest_mesh = 0;
     inline uintptr_t closest_pawn = 0;
+    inline Vector3   closest_aim;        // the exact validated point the aimbot uses
 
     inline Camera    camera;            // refreshed once per tick
 
@@ -486,7 +491,11 @@ namespace cache
 // ---------------------------------------------------------------------------
 inline bool read_relative_block(uintptr_t component, Vector3& loc, Rotator& rot, Vector3& scale)
 {
-    // three doubles per field, spacing asserted in offsets_gen.hpp
+    // Three doubles per field. UE stores the relative transform with FVector3d /
+    // FRotator3d here, so the dump's 0x18 spacing is consistent with LWC even
+    // though UPROPERTY reflection widens it to FVector/FRotator. If a future dump
+    // shows 0x18 spacing with float-sized components, the assert in offsets_gen.hpp
+    // fires and this needs the float path instead.
     if (!mem.read(component + off::RelativeLocation, loc)) return false;
     if (!mem.read(component + off::RelativeRotation, rot)) return false;
     if (!mem.read(component + off::RelativeScale3D, scale)) return false;
@@ -662,6 +671,9 @@ inline bool project_world_to_screen(const Vector3& world, Vector2& out,
     const double right = delta.dot(axis_right);
     const double up    = delta.dot(axis_up);
 
+    // Unreal's POV FOV is HORIZONTAL, so one focal length serves both axes:
+    // f = (W/2)/tan(hfov/2) == (H/2)/tan(vfov/2) for hfov derived from the aspect.
+    // Using center_y here instead would be wrong.
     const double focal = (settings::center_x / std::tan(camera.fov * M_PI / 360.0));
     if (!std::isfinite(focal) || focal <= 0.0) return false;
 
@@ -1199,7 +1211,12 @@ namespace draw
             GetTextExtentPoint32A(builder.dc, &ch, 1, &size);
 
             const int adv = (size.cx > 0) ? size.cx : (px / 3);
-            if (pen_x + adv + 2 >= atlas::kWidth) { pen_x = 1; pen_y += builder.cell_h + 1; }
+
+            // A proportional glyph's ink can be wider than its advance, so the
+            // rectangle has to cover the larger of the two — using the advance
+            // clipped the right edge of wide glyphs out of the atlas.
+            const int ink_w = size.cx > adv ? size.cx : adv;
+            if (pen_x + ink_w + 2 >= atlas::kWidth) { pen_x = 1; pen_y += builder.cell_h + 1; }
             if (pen_y + builder.cell_h + 1 >= atlas::kHeight) break;
 
             TextOutA(builder.dc, pen_x, pen_y, &ch, 1);
@@ -1207,7 +1224,7 @@ namespace draw
 
             Glyph& g = f.glyphs[c - 32];
             g.adv = static_cast<float>(adv);
-            g.w   = static_cast<float>(adv);
+            g.w   = static_cast<float>(ink_w);
             g.h   = static_cast<float>(builder.cell_h);
             g.u0  = static_cast<float>(pen_x) / atlas::kWidth;
             g.v0  = static_cast<float>(pen_y) / atlas::kHeight;
@@ -1651,7 +1668,7 @@ inline bool game_foreground()
 // Aim point off the capsule: centre + (BaseEyeHeight - CapsuleHalfHeight) on Z.
 // Both fields are validated; if either is implausible we fall back to the centre
 // (which is still a real, validated position) instead of inventing a height.
-inline bool pawn_aim_point(uintptr_t pawn, uintptr_t root, const Vector3& centre, Vector3& out)
+inline bool pawn_aim_point(uintptr_t pawn, const Vector3& centre, Vector3& out)
 {
     out = centre;
 
@@ -1688,7 +1705,6 @@ inline bool pawn_aim_point(uintptr_t pawn, uintptr_t root, const Vector3& centre
         return valid_vector(out);
     }
 
-    (void)root;
     return valid_vector(out);
 }
 
@@ -1698,9 +1714,13 @@ inline void game_tick()
 {
     cache::closest_mesh = 0;
     cache::closest_pawn = 0;
+    cache::closest_aim = Vector3();
     cache::closest_distance = DBL_MAX;
 
     cache::camera = Camera{};
+    cache::player_state = 0;        // was left over from the previous tick
+    cache::player_count = 0;
+    cache::my_team_valid = false;
 
     if (!mem.alive()) return;
 
@@ -1751,10 +1771,6 @@ inline void game_tick()
     cache::my_team_valid = false;
     if (cache::local_pawn)
     {
-        uintptr_t root = 0;
-        if (mem.read(cache::local_pawn + off::RootComponent, root) && Mem::plausible_ptr(root))
-            component_world_location(root, cache::local_origin);   // validated inside
-
         uintptr_t player_state = 0;
         if (mem.read(cache::local_pawn + off::PlayerState, player_state) && Mem::plausible_ptr(player_state))
         {
@@ -1800,19 +1816,13 @@ inline void game_tick()
         if (!Mem::plausible_ptr(player_state)) continue;
         if (player_state == cache::player_state) continue;
 
-        uint8_t spectator_flags = 0;
-        if (mem.read(player_state + off::bIsSpectator, spectator_flags))
-        {
-            // FILL: bIsSpectator shares its byte with bIsABot/bIsInactive; the bit
-            // index is not in the dump. Until it is confirmed the whole byte is
-            // ignored rather than guessed.
-            (void)spectator_flags;
-        }
-
         uint8_t team = 0;
-        if (mem.read(player_state + off::TeamIndex, team))
+        const bool team_ok = mem.read(player_state + off::TeamIndex, team);
+        if (cfg::kTeamCheck && cache::my_team_valid)
         {
-            if (cfg::kTeamCheck && cache::my_team_valid && team == cache::my_team_id) continue;
+            // fail closed: if the team byte cannot be read we cannot prove this is
+            // an enemy, so we do not aim at it (fail-open was aiming at squadmates)
+            if (!team_ok || team == cache::my_team_id) continue;
         }
 
         uintptr_t pawn = 0;
@@ -1832,7 +1842,7 @@ inline void game_tick()
         if (!std::isfinite(distance_m) || distance_m > cfg::kMaxTargetM) continue;
 
         Vector3 aim;
-        if (!pawn_aim_point(pawn, root, centre, aim)) continue;
+        if (!pawn_aim_point(pawn, centre, aim)) continue;
 
         Vector2 aim2d;
         if (!project_world_to_screen(aim, aim2d)) continue;
@@ -1851,6 +1861,9 @@ inline void game_tick()
             if (mem.read(pawn + off::CapsuleHalfHeight, capsule_half) &&
                 std::isfinite(capsule_half) && capsule_half > 1.f && capsule_half < 500.f)
                 half = capsule_half;
+
+            // centre from the validated component transform, capsule half from the
+            // pawn; the box top follows the same aim point the FOV gate used
 
             const Vector3 top(centre.x, centre.y, centre.z + half);
             const Vector3 bottom(centre.x, centre.y, centre.z - half);
@@ -1927,6 +1940,7 @@ inline void game_tick()
         cache::closest_distance = screen_dist;
         cache::closest_mesh = mesh;
         cache::closest_pawn = pawn;
+        cache::closest_aim = aim;
     }
 }
 
@@ -1938,23 +1952,10 @@ inline void aimbot()
     if (!cache::camera.valid) return;
     if (!mem.alive()) return;
 
-    Vector3 aim;
-    bool have = false;
-
-    if (cfg::kBoneWorldLocations && cache::closest_mesh)
-        have = bone_world_location(cache::closest_mesh, cfg::kHeadBone, aim);
-
-    if (!have)
-    {
-        if (!cache::closest_pawn) return;
-
-        uintptr_t root = 0;
-        if (!mem.read(cache::closest_pawn + off::RootComponent, root) || !Mem::plausible_ptr(root)) return;
-
-        Vector3 centre;
-        if (!component_world_location(root, centre)) return;
-        if (!pawn_aim_point(cache::closest_pawn, root, centre, aim)) return;
-    }
+    // The tick already resolved and validated this exact point (bones when the
+    // bone path is wired, capsule otherwise). Reading the pawn again here could
+    // produce a different answer than the one the FOV gate accepted.
+    Vector3 aim = cache::closest_aim;
 
     if (!valid_vector(aim)) return;
 

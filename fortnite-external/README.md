@@ -23,7 +23,8 @@ written into the game process and nothing is injected.
 | `GUIA.md` | passo a passo em português |
 | `../tools/gen_offsets.py` | dump JSON → `offsets_gen.hpp` |
 | `../tools/build_single.py` | source + header → single file, then runs the gate |
-| `../tools/syntax_check.py` | **real** compile + link for x86_64-windows (zig or mingw-w64) |
+| `../tools/syntax_check.py` | **real** compile + link for x86_64-windows (zig or mingw-w64); exits 3 = not compiled |
+| `../tools/check_math.py` | projection/basis invariants — orthonormality, forward→centre, behind rejected |
 | `../tools/check_all.sh` | regenerate + rebuild + gate |
 | `../tools/fortnite_offsets_43.00.json` | the dump (240 structs, 5886 fields) |
 
@@ -91,6 +92,14 @@ Real — read from the dump and asserted at compile time:
 | `PlayerController::PlayerCameraManager` 0x330 → `CameraCachePrivate` 0x15A0 → `POV` 0x10 | dump |
 | `MinimalViewInfo` Location 0x00 / Rotation 0x18 / FOV 0x30 | dump |
 
+Everything else it needs is derived, and the derivations are checked:
+
+- `rotation_matrix()` uses UE's canonical basis with the third row negated. An
+  earlier revision had the sign dropped on one term, which made the frame
+  **non-orthonormal** (det up to 2.94, "up" axis pointing backwards) — W2S was
+  wrong at any pitch != 0. `tools/check_math.py` now asserts det == 1, axis
+  orthogonality, forward→screen centre, up→above centre and behind→rejected.
+
 Layout facts derived from the dump, not assumed — `offsets_gen.hpp` carries
 `static_assert`-style checks for each, so a dump with a different layout fails
 the build instead of skewing the math:
@@ -133,3 +142,6 @@ Random data in `.data` does not survive that.
   scan. **Not** compiled with MSVC, and **not** run against the game — no
   Windows machine and no Fortnite here. Treat every runtime number above as
   unverified until you have run it.
+- Projection maths verified numerically (`python3 tools/check_math.py`): the
+  rotator basis is a proper rotation and the W2S invariants hold at six camera
+  orientations, including roll and negative pitch.

@@ -231,6 +231,15 @@ O overlay agora é uma janela `WS_EX_LAYERED | WS_EX_TOPMOST` comum: fica por ci
 3. `python3 tools/build_single.py` (recria o arquivo único)
 4. recompile
 
+Antes de confiar no build, os dois gates (não precisam do jogo nem do Windows):
+
+```
+python3 tools/check_math.py      # matemática da projeção (basis ortonormal, W2S)
+python3 tools/syntax_check.py    # compila de verdade pra x86_64-windows
+```
+
+Se o `syntax_check` disser `SKIPPED`, não houve compilação nenhuma — não é "passou".
+
 Se `tools/` não estiver na sua máquina (você copiou só o `.cpp`), dá pra editar à
 mão: o `off::` está logo no começo do arquivo, cada linha tem o `Struct::Campo`
 de origem no comentário. O bloco `off_layout` no fim do header é a checagem de
