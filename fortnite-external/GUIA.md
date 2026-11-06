@@ -75,6 +75,25 @@ Se não quiser usar o `.sln`, dá pra criar do zero (útil se for mexer muito no
 > é porque o projeto novo vem com `pch.h` ligado: em *Propriedades → C/C++ → Cabeçalhos Pré-compilados*,
 > mude de **Usar** para **Não Usar Cabeçalhos Pré-compilados**.
 
+### Erro `MSB8020` (não é possível encontrar as ferramentas v143)
+
+Três saídas, da mais rápida pra mais completa:
+
+**1. Redirecionar (30 segundos).** No Solution Explorer, botão direito em cima da
+**solução** `fortnite_external` (a linha de cima, com o ícone de solução) →
+**Redirecionar Solução…** → escolhe a versão do toolset que aparecer na lista → OK → compila de novo.
+
+**2. Instalar o toolset (melhor se for usar muito).** Visual Studio Installer →
+*Modificar* → aba **Componentes individuais** → marca
+**MSVC v143 – Ferramentas de build C++ x64/x86 da Versão mais Recente** → *Modificar*.
+Depois recompila.
+
+**3. Trocar o toolset no projeto, à mão.** Abre `fortnite_external.vcxproj` no
+Bloco de Notas e troca as duas linhas `<PlatformToolset>v143</PlatformToolset>` por
+`<PlatformToolset>$(DefaultPlatformToolset)</PlatformToolset>`. Assim ele usa o que
+estiver instalado, seja 2022, 2019 ou o preview.
+(o `.vcxproj` que veio no zip do repo novo já vem assim.)
+
 ### Opção C — linha de comando (sem IDE)
 
 Menu Iniciar → **x64 Native Tools Command Prompt for VS 2022** (tem que ser esse, não o `cmd`):
