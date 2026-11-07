@@ -55,14 +55,37 @@ then reports that it cannot start the program. The project pins
 you do not have; install *Desktop development with C++* (MSVC v143) or use
 `build.bat`.
 
+#### `--diag`: prove the overlay works without the game
+
+```
+fortnite_external.exe --diag
+```
+
+Creates the window, the D3D9Ex device and the font, draws one known string,
+prints `[diag] ... ok` per step and exits after 10 s. That splits "the overlay
+never appeared" (device/window problem) from "the overlay appeared but found
+nothing" (offsets/world problem) without a match running.
+
 #### It must not close silently
 
 A console program that fails at startup closes its own window, which looks like
-"abriu e fechou". Every fatal path now ends in `fatal()`: the reason is printed,
-then `press ENTER to close this window`. A lost D3D9Ex device is retried for ~2 s
-before that happens, and a device failure no longer breaks the loop silently.
-If the window still vanishes, it is a crash rather than exit — run it from
-`run.bat`, which prints the exit code.
+"abriu e fechou". Every exit now leaves evidence:
+
+| path | trace |
+|---|---|
+| fatal startup error | reason printed, `fortnite_fault.txt`, `press ENTER` (exit 1) |
+| unhandled exception | `SetUnhandledExceptionFilter` -> `fortnite_fault.txt` + message |
+| main loop stalled > 8 s | watchdog thread -> `fortnite_fault.txt`, exit 2 |
+| console closed / Ctrl+C | which signal it was, written to `fortnite_fault.txt` |
+| normal exit | exit code printed; window kept open while we own the console |
+
+`GetConsoleProcessList` decides whether the console is ours (double-click /
+`run.bat`) or inherited from an existing shell: only in the first case does it
+wait for ENTER, so scripted runs are never blocked.
+
+`tools/fuzz_math.py` compiles the rotator/projection/validation code from this
+source on the host and hammers it with hostile input (poles, wraps, NaN, inf,
+absurd FOV, behind-camera points). It is part of `tools/check_all.sh`.
 
 
 MSVC x64 Developer prompt (or `build.bat`):

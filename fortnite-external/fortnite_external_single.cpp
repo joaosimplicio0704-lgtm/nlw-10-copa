@@ -72,6 +72,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>     // system("pause") in fatal()
+#include <atomic>      // watchdog heartbeat
 #include <vector>
 
 #pragma comment(lib, "d3d9.lib")
@@ -121,6 +122,7 @@ namespace cfg
     //       then fill kTransformStride / kBoneTransformsAreFloat and flip this.
     constexpr bool  kBoneWorldLocations   = false;
     constexpr int   kHeadBone             = 109;     // FILL: verify index < NumBones
+    constexpr int   kMaxBoneIndex         = 511;     // sanity bound for any bone read
     constexpr uintptr_t kTransformStride  = 0x0;     // FILL: 0x60 (FTransform) or 0x30 (FTransform3f)
     constexpr bool  kBoneTransformsAreFloat = false; // FILL: FTransform3f vs FTransform
 
@@ -287,30 +289,102 @@ namespace settings
     }
 }
 
+// ---------------------------------------------------------------------------
+//  crash / hang diagnostics
+//
+//  "Fechou sozinho" has three completely different causes and they look the same
+//  from the outside: a clean exit, an unhandled exception, or a hang killed by
+//  the OS. Each one now leaves a different trace:
+//
+//    clean exit      -> console says WHY and what the exit code is
+//    exception       -> fortnite_fault.txt next to the .exe + a message box
+//    hang (>8 s)     -> watchdog writes fortnite_fault.txt and exits with 2
+// ---------------------------------------------------------------------------
+inline char g_exe_dir[MAX_PATH] = { 0 };
+
+inline void fault_file(const char* what, const char* extra = nullptr);
+inline void say(const char* fmt, ...);
+
+// True when this process owns its console window, which is what happens when the
+// exe is double-clicked from Explorer (or started elevated): the window disappears
+// the moment we return. When the console was inherited from an existing cmd/Terminal,
+// GetConsoleProcessList returns more than one pid and there is nothing to keep open.
+inline bool owns_console()
+{
+    DWORD list[8]{};
+    const DWORD count = GetConsoleProcessList(list, 8);
+    return count == 1;
+}
+
+// Console "press ENTER" that also works when the user double-clicked the exe
+// (the only interactive case). Never blocks a redirected/piped run.
+inline void pause_console()
+{
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    if (!in || in == INVALID_HANDLE_VALUE || GetFileType(in) != FILE_TYPE_CHAR) return;
+
+    printf("[*] press ENTER to close this window\n");
+    fflush(stdout);
+
+    char buf[8];
+    DWORD got = 0;
+    ReadConsoleA(in, buf, sizeof(buf), &got, nullptr);
+}
+
 // A console program that dies at startup closes its own console window, which
 // looks exactly like "abre e fecha". Every fatal path below stops here instead:
 // the reason is printed, the exit code is set, and the window waits for a key.
-[[noreturn]] inline void fatal(const char* why)
+[[noreturn]] inline void fatal(const char* why, int code = 1)
 {
     printf("\n[!] %s\n", why ? why : "fatal error");
-    printf("[!] press ENTER to close this window\n");
-    fflush(stdout);
+    fault_file(why ? why : "fatal error", nullptr);
 
-    // keep reading until a real newline: the console may be non-interactive,
-    // and GetAsyncKeyState/ReadConsole can return immediately with nothing.
-    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
-    if (in && in != INVALID_HANDLE_VALUE && GetFileType(in) == FILE_TYPE_CHAR)
-    {
-        char buf[8];
-        DWORD got = 0;
-        ReadConsoleA(in, buf, sizeof(buf), &got, nullptr);
-    }
-    else
-    {
-        system("pause");
-    }
+    pause_console();
+    ExitProcess(static_cast<UINT>(code));
+}
 
-    ExitProcess(1);
+// Unhandled exceptions (access violation, stack overflow, /EHa not needed).
+// Writes the fault file and shows a box, so a crash can never be silent.
+inline LONG WINAPI exception_filter(EXCEPTION_POINTERS* info)
+{
+    const unsigned long code = info && info->ExceptionRecord
+                                   ? info->ExceptionRecord->ExceptionCode : 0;
+    char extra[256];
+    snprintf(extra, sizeof(extra), "exception 0x%08lX at %p", code,
+             info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : nullptr);
+
+    fault_file("unhandled exception", extra);
+    fatal("unhandled exception - see fortnite_fault.txt (and the code above)");
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+// If the loop stops heartbeating (a read into unmapped memory, a D3D hitch
+// that never returns), the OS would kill nothing and the window would just sit
+// there. This notices within 8 s, records it, and exits with code 2.
+inline std::atomic<unsigned long long> g_heartbeat{ 0 };
+inline bool g_watchdog_started = false;
+inline unsigned long long g_started_ms = 0;
+
+inline DWORD WINAPI watchdog_thread(LPVOID)
+{
+    for (;;)
+    {
+        Sleep(1000);
+
+        const unsigned long long hb = g_heartbeat.load();
+        if (!hb) continue;                              // loop not started yet
+
+        const unsigned long long now = GetTickCount64();
+        if (now - hb < 8000) continue;
+
+        fault_file("main loop stalled (no heartbeat for 8s)", nullptr);
+        printf("[!] the main loop stopped responding for 8s - exiting so it does not "
+               "look like a freeze. See fortnite_fault.txt\n");
+        fflush(stdout);
+        Sleep(300);
+        ExitProcess(2);
+    }
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -858,7 +932,10 @@ inline bool component_world_location(uintptr_t component, Vector3& out)
 inline bool bone_component_location(uintptr_t mesh, int bone_id, Vector3& out)
 {
     if (!cfg::kBoneWorldLocations) return false;
-    if (!mem.alive() || !mesh || bone_id < 0) return false;
+    // A bone id also has to be inside the array we are indexing: with a wrong
+    // stride an unbounded id walks off into unrelated memory that still reads.
+    if (bone_id < 0 || bone_id > cfg::kMaxBoneIndex) return false;
+    if (!mem.alive() || !mesh) return false;
     if (cfg::kTransformStride < 0x20) return false;      // stride not filled in yet
 
     // Preferred: the real bone array pointer if someone dumps it into off::BoneArray.
@@ -1249,7 +1326,15 @@ namespace overlay
         switch (msg)
         {
         case WM_ERASEBKGND: return 1;
-        case WM_DESTROY:    PostQuitMessage(0); return 0;
+
+        // Someone closed the overlay window (Alt+F4, task manager "end task",
+        // Alt+Tab close). PostQuitMessage only sets a WM_QUIT flag that this
+        // loop never reads, so the process used to sit there forever with no
+        // window. Flip `running` as well: the loop exits and tears down cleanly.
+        case WM_DESTROY:
+            overlay::running = false;
+            PostQuitMessage(0);
+            return 0;
         default:            return DefWindowProcA(h, msg, wp, lp);
         }
     }
@@ -1393,19 +1478,33 @@ namespace overlay
     {
         struct Ctx { HWND hwnd; DWORD pid; } ctx{ nullptr, pid };
 
-        EnumWindows([](HWND h, LPARAM lp) -> BOOL {
-            auto* c = reinterpret_cast<Ctx*>(lp);
-            DWORD owner = 0;
-            GetWindowThreadProcessId(h, &owner);
-            if (owner == c->pid && IsWindowVisible(h) && GetWindow(h, GW_OWNER) == nullptr)
-            {
+        // Pass 1: a visible, unowned top-level window (the normal case).
+        // Pass 2: any visible owned window with a caption (some launchers run the
+        // game behind one). Never returns the overlay itself: its pid is ours.
+        struct Ctx2 { HWND hwnd; DWORD pid; bool allow_owned; } ctx2{ nullptr, pid, false };
+
+        for (int pass = 0; pass < 2 && !ctx2.hwnd; ++pass)
+        {
+            ctx2.allow_owned = pass == 1;
+
+            EnumWindows([](HWND h, LPARAM lp) -> BOOL {
+                auto* c = reinterpret_cast<Ctx2*>(lp);
+                DWORD owner = 0;
+                GetWindowThreadProcessId(h, &owner);
+                if (owner != c->pid) return TRUE;
+                if (!IsWindowVisible(h)) return TRUE;
+
+                const bool owned = GetWindow(h, GW_OWNER) != nullptr;
+                if (owned && !c->allow_owned) return TRUE;
+                if (owned && !(GetWindowLongA(h, GWL_STYLE) & WS_CAPTION)) return TRUE;
+
                 c->hwnd = h;
                 return FALSE;
-            }
-            return TRUE;
-        }, reinterpret_cast<LPARAM>(&ctx));
+            }, reinterpret_cast<LPARAM>(&ctx2));
+        }
 
-        return ctx.hwnd;
+        (void)ctx;
+        return ctx2.hwnd;
     }
 }
 
@@ -2967,6 +3066,9 @@ inline void main_loop(uintptr_t uworld_override)
 
     while (overlay::running)
     {
+        // watchdog hears from us every frame; if it stops, we hang -> exit 2
+        g_heartbeat.store(GetTickCount64());
+
         MSG msg{};
         while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE))
         {
@@ -3071,7 +3173,8 @@ inline void main_loop(uintptr_t uworld_override)
 // ---------------------------------------------------------------------------
 //  startup / teardown
 // ---------------------------------------------------------------------------
-inline void parse_args(int argc, char** argv, uintptr_t& uworld_override, bool& force_scan)
+inline void parse_args(int argc, char** argv, uintptr_t& uworld_override, bool& force_scan,
+                       bool& diag)
 {
     for (int i = 1; i < argc; ++i)
     {
@@ -3095,15 +3198,57 @@ inline void parse_args(int argc, char** argv, uintptr_t& uworld_override, bool& 
         {
             force_scan = true;
         }
+        else if (_stricmp(argv[i], "--diag") == 0)
+        {
+            diag = true;
+        }
         else if (_stricmp(argv[i], "--help") == 0 || _stricmp(argv[i], "-h") == 0)
         {
-            printf("usage: fortnite_external [--uworld 0xOFFSET] [--scan]\n"
+            printf("usage: fortnite_external [--uworld 0xOFFSET] [--scan] [--diag]\n"
                    "  --uworld  GWorld offset inside the module (validated)\n"
-                   "  --scan    run the bounded watcher-section scan now\n"
+                   "  --scan    run the bounded writable-section scan now\n"
+                   "  --diag    test the overlay/device/font and exit (no game needed)\n"
                    "keys: INSERT menu, END unload, aim key held to aim\n");
             ExitProcess(0);
         }
     }
+}
+
+// Dumped next to the .exe whenever the program dies or hangs, so there is
+// something to look at after the console is gone.
+inline void fault_file(const char* what, const char* extra)
+{
+    char path[MAX_PATH];
+    snprintf(path, sizeof(path), "%sfortnite_fault.txt", g_exe_dir[0] ? g_exe_dir : "");
+
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "a") != 0 || !f) return;
+
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+
+    fprintf(f, "=== %04d-%02d-%02d %02d:%02d:%02d ===\n", st.wYear, st.wMonth, st.wDay,
+            st.wHour, st.wMinute, st.wSecond);
+    fprintf(f, "what      : %s\n", what ? what : "?");
+    if (extra && extra[0]) fprintf(f, "detail    : %s\n", extra);
+    fprintf(f, "process   : pid %lu  base 0x%llX  alive %d\n",
+            static_cast<unsigned long>(mem.pid),
+            static_cast<unsigned long long>(mem.base), mem.alive() ? 1 : 0);
+    fprintf(f, "uworld    : 0x%llX (ready %d)\n",
+            static_cast<unsigned long long>(cache::uworld), cache::uworld_ready ? 1 : 0);
+    fprintf(f, "layout    : %s\n",
+            layout::relative == VecLayout::Float32 ? "float32"
+          : layout::relative == VecLayout::Float64 ? "float64" : "unknown");
+    fprintf(f, "pawn      : 0x%llX  controller 0x%llX\n",
+            static_cast<unsigned long long>(cache::local_pawn),
+            static_cast<unsigned long long>(cache::player_controller));
+    fprintf(f, "camera    : %s  fov %.1f\n", cache::camera.valid ? "valid" : "invalid",
+            static_cast<double>(cache::camera.fov));
+    fprintf(f, "\n");
+    fclose(f);
+
+    printf("[!] wrote %s\n", path);
+    fflush(stdout);
 }
 
 // Ctrl+C / console close / logoff would otherwise kill the process with the
@@ -3111,8 +3256,19 @@ inline void parse_args(int argc, char** argv, uintptr_t& uworld_override, bool& 
 // main_loop so the normal teardown below always runs.
 inline BOOL WINAPI console_ctrl(DWORD type)
 {
-    (void)type;
+    // CTRL_C / CTRL_BREAK / CTRL_CLOSE / logoff / shutdown. Record which one, so a
+    // console window that closes on its own is not mistaken for a crash.
+    const char* what = type == CTRL_C_EVENT ? "console ctrl-c"
+                     : type == CTRL_BREAK_EVENT ? "console ctrl-break"
+                     : type == CTRL_CLOSE_EVENT ? "console window closed"
+                     : "windows session ending";
+
+    printf("\n[*] %s -> unloading\n", what);
+    fflush(stdout);
+    fault_file(what, nullptr);
+
     overlay::running = false;
+    Sleep(150);              // let teardown run; Windows kills us right after
     return TRUE;
 }
 
@@ -3123,20 +3279,17 @@ int main(int argc, char** argv)
     SetConsoleTitleA("fortnite external (user mode)");
 
     // Launched from Explorer / Visual Studio with F5, the working directory is
-    // not the project folder, so "fortnite_external.cfg.json" lands somewhere
-    // unexpected (or nowhere writable). Anchor it next to the .exe instead.
+    // not the project folder, so the cfg and the fault log would land somewhere
+    // unexpected (or nowhere writable). Anchor both next to the .exe.
+    if (GetModuleFileNameA(nullptr, g_exe_dir, MAX_PATH))
     {
-        char exe_path[MAX_PATH]{};
-        if (GetModuleFileNameA(nullptr, exe_path, MAX_PATH))
-        {
-            char* last = strrchr(exe_path, '\\');
-            if (last)
-            {
-                *last = '\0';
-                SetCurrentDirectoryA(exe_path);
-            }
-        }
+        char* last = strrchr(g_exe_dir, '\\');
+        if (last) { last[1] = '\0'; SetCurrentDirectoryA(g_exe_dir); }
+        else g_exe_dir[0] = '\0';
     }
+
+    // from here on, any crash or fatal path leaves evidence
+    SetUnhandledExceptionFilter(exception_filter);
 
     timeBeginPeriod(1);
 
@@ -3150,7 +3303,8 @@ int main(int argc, char** argv)
 
     uintptr_t uworld_override = cfg::kUWorldOverride;
     bool force_scan = false;
-    parse_args(argc, argv, uworld_override, force_scan);
+    bool diag = false;
+    parse_args(argc, argv, uworld_override, force_scan, diag);
 
     status::stage = status::Stage::Booting;
     status::since_ms = GetTickCount64();
@@ -3187,14 +3341,99 @@ int main(int argc, char** argv)
         fatal("font atlas creation failed (Consolas missing?)");
     }
 
+    if (diag)
+    {
+        // --diag: everything that can fail before the game is involved has now
+        // succeeded (window, D3D9Ex device, font atlas). Render one frame with a
+        // known string so a blank overlay is caught here and not in a match.
+        printf("[diag] window      : ok (hwnd 0x%p)\n", static_cast<void*>(overlay::hwnd));
+        printf("[diag] d3d9ex      : ok (device 0x%p)\n", static_cast<void*>(overlay::device));
+        printf("[diag] font atlas  : ok (%dpx, %s)\n", cfg::kFontPx,
+               draw::font.tex ? "texture created" : "MISSING");
+        printf("[diag] screen      : %dx%d (centre %d,%d)\n", settings::width, settings::height,
+               settings::center_x, settings::center_y);
+        printf("[diag] process     : %s\n", mem.alive() ? "game found, handle open" : "game not running (fine)");
+        printf("[diag] cwd         : %s\n", g_exe_dir[0] ? g_exe_dir : "?");
+
+        if (overlay::device)
+        {
+            draw::reset();
+            ui::begin_frame();
+            draw::text(60.f, 60.f, ui::kColAccent, "fortnite external - diag frame");
+            draw::text(60.f, 84.f, ui::kColText, "if you can read this, the overlay works");
+            draw::text(60.f, 108.f, ui::kColText, settings::show_menu ? "menu open" : "menu closed");
+
+            overlay::device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.f, 0);
+            if (SUCCEEDED(overlay::device->BeginScene()))
+            {
+                draw::flush(overlay::device);
+                overlay::device->EndScene();
+            }
+            overlay::device->Present(nullptr, nullptr, nullptr, nullptr);
+        }
+
+        printf("[diag] a line of text should be visible at the top-left for 10 s\n");
+        fflush(stdout);
+        Sleep(10000);
+
+        overlay::release_font();
+        overlay::destroy_device();
+        overlay::destroy_window();
+        mem.detach();
+        timeEndPeriod(1);
+
+        printf("[diag] done: no fatal error\n");
+        return 0;
+    }
+
     // console hints that only make sense once, before the loop takes over
     if (uworld_override)
         printf("[*] --uworld 0x%llX (validated before use)\n",
                static_cast<unsigned long long>(uworld_override));
     if (force_scan)
-        printf("[*] --scan: UWorld scan runs up front\n");
+    {
+        // --scan: run the bounded section scan synchronously instead of waiting
+        // for the first bootstrap tick. Still bounded (chunked, capped), just
+        // driven from here so the user sees a result before the overlay shows up.
+        printf("[*] --scan: running the bounded UWorld scan now\n");
+        fflush(stdout);
+
+        if (mem.attach(cfg::kProcessName))
+        {
+            uintptr_t world = 0;
+            for (int attempt = 0; attempt < 240 && !world; ++attempt)   // <= 30 s
+            {
+                world = resolve_uworld();
+                if (!world) Sleep(125);
+            }
+
+            if (world)
+            {
+                cache::uworld = world;
+                cache::uworld_ready = true;
+                printf("[*] UWorld by scan: 0x%llX\n", static_cast<unsigned long long>(world));
+            }
+            else
+            {
+                printf("[!] --scan found no UWorld; the background scan continues\n");
+            }
+        }
+        else
+        {
+            printf("[!] --scan: the game is not running (name: %ls)\n", cfg::kProcessName);
+        }
+    }
+
+    {
+        HANDLE wd = CreateThread(nullptr, 0, watchdog_thread, nullptr, 0, nullptr);
+        if (wd) { CloseHandle(wd); g_watchdog_started = true; }
+    }
+    g_heartbeat.store(GetTickCount64());
 
     main_loop(uworld_override);
+
+    g_heartbeat.store(0);        // watchdog stands down before teardown
+
 
     // teardown, in the only order that is safe: font -> device -> d3d -> window
     overlay::release_font();
@@ -3203,6 +3442,14 @@ int main(int argc, char** argv)
     mem.detach();
     timeEndPeriod(1);
 
-    printf("[*] unloaded\n");
+    printf("[*] unloaded (exit code 0)\n");
+    printf("[*] if this window is about to close and you did not press anything,\n"
+           "    the reason is above or in fortnite_fault.txt\n");
+    fflush(stdout);
+
+    // Keep the window up only when we own it (double-click / run.bat), so an
+    // automated run from an existing shell is not blocked.
+    if (owns_console()) pause_console();
+
     return 0;
 }

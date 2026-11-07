@@ -215,6 +215,7 @@ Se você já tem o offset do GWorld pra esse patch, passe na linha de comando �
 validado antes de ser aceito:
 
 ```
+fortnite_external.exe --diag              (testa overlay/device/fonte e sai)
 fortnite_external.exe --uworld 0x1C8E1578
 ```
 
@@ -250,6 +251,45 @@ Guias rápidos dentro do menu:
 ---
 
 ## 3.1. "Abriu e fechou na hora"
+
+Antes de qualquer coisa: **teste o overlay sem o jogo**, em 5 segundos.
+
+```
+fortnite_external.exe --diag
+```
+
+Ele cria a janela, o device D3D9Ex e a fonte, desenha uma linha de texto,
+imprime cada passo com `[diag] ... ok` e sai sozinho depois de 10 s. Se aparecer
+texto no canto da tela, o problema **não é** overlay — é o jogo/offset. Se o
+`--diag` falhar, a mensagem diz exatamente qual etapa:
+
+| última linha | causa provável |
+|---|---|
+| `[!] overlay window creation failed` | outro overlay/DWM bloqueando, ou sessão sem desktop |
+| `[!] D3D9Ex device creation failed` | sem D3D9 (driver/VM/remote desktop), jogo em fullscreen exclusivo |
+| `[!] font atlas creation failed` | Consolas ausente, ou GDI sem acesso |
+
+Agora, se a janela fechar sozinha depois disso, o programa deixa rastro —
+sempre. Procure em `fortnite_fault.txt`, na mesma pasta do `.exe`:
+
+```
+=== 2026-11-06 23:12:44 ===
+what      : unhandled exception
+detail    : exception 0xC0000005 at 0x00007FF6...
+process   : pid 0  base 0x0  alive 0
+...
+```
+
+| o que está no arquivo | o que aconteceu |
+|---|---|
+| `unhandled exception` | crash (access violation) — é bug, mande o arquivo |
+| `main loop stalled` + código de saída 2 | travou por 8 s; o watchdog encerra pra não parecer freeze |
+| `console window closed` | alguém fechou o console / Alt+F4 |
+| `fatal error ...` | falha de inicialização, com o motivo na linha `what` |
+
+E o console agora **não fecha no sucesso**: se o programa foi aberto por duplo
+clique (janela própria), ele espera ENTER no fim e imprime o código de saída.
+
 
 Ordem de investigação, porque quase sempre é uma das três coisas:
 
