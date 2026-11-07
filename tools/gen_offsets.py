@@ -48,14 +48,13 @@ WANT = {
     "RelativeScale3D":     ("SceneComponent", "RelativeScale3D"),
 
     # --- skeletal mesh -----------------------------------------------------
-    "BoneSpaceTransforms":     ("SkeletalMeshComponent", "CachedBoneSpaceTransforms"),
-    "ComponentSpaceTransforms":("SkeletalMeshComponent", "CachedComponentSpaceTransforms"),
     "RecentlyRendered":        ("SkinnedMeshComponent", "bRecentlyRendered"),
 
     # --- player state ------------------------------------------------------
     "PawnPrivate":         ("PlayerState", "PawnPrivate"),
     "TeamIndex":           ("FortPlayerStateAthena", "TeamIndex"),
-    "bIsSpectator":        ("PlayerState", "bIsSpectator"),
+    "BoneSpaceTransforms":     ("SkeletalMeshComponent", "CachedBoneSpaceTransforms"),
+    "ComponentSpaceTransforms":("SkeletalMeshComponent", "CachedComponentSpaceTransforms"),
 
     # --- fort pawn / health ------------------------------------------------
     "HealthSet":           ("FortPawn", "HealthSet"),
@@ -127,13 +126,13 @@ def emit(doc, missing, lines):
     globals_ = doc["offsets"].get("globals") or {}
 
     def emit_const(name, value, comment):
-        lines.append(f"    constexpr uintptr_t {name:<22} = 0x{value:X};  // {comment}")
+        lines.append(f"    [[maybe_unused]] constexpr uintptr_t {name:<22} = 0x{value:X};  // {comment}")
 
     for name, (struct, field) in WANT.items():
         if struct not in structs or field not in structs[struct]:
             missing.append(f"{name} ({struct}::{field})")
             lines.append(f"    // FILL: {name} — {struct}::{field} absent from dump")
-            lines.append(f"    constexpr uintptr_t {name:<22} = 0x0;")
+            lines.append(f"    [[maybe_unused]] constexpr uintptr_t {name:<22} = 0x0;")
             continue
         emit_const(name, hexint(structs[struct][field]), f"{struct}::{field}")
 
@@ -145,7 +144,7 @@ def emit(doc, missing, lines):
         lines.append(f"    // FILL: {name} — " + recipe[0])
         for extra in recipe[1:]:
             lines.append(f"    //   {extra}" if not extra.startswith("  ") else f"    // {extra}")
-        lines.append(f"    constexpr uintptr_t {name:<22} = 0x0;")
+        lines.append(f"    [[maybe_unused]] constexpr uintptr_t {name:<22} = 0x0;")
 
     head = [
         "#pragma once",

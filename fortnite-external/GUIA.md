@@ -143,15 +143,44 @@ Ordem de execução:
    lobby ele fica com `layout: UNRESOLVED` e não mira nem desenha
 2. clica com o botão direito no `fortnite_external.exe` → **Executar como administrador**
    (sem admin, o `OpenProcess` falha)
-3. uma janela de console abre e escreve:
+3. uma janela de console abre e escreve, e um **painel no canto da tela** mostra
+   a mesma coisa com uma barra de progresso:
 
 ```
-[*] waiting for Fortnite...
-[*] base 0x7FF6XXXXXXXX  pid 25184
+[*] fortnite external - user mode, no injection, no driver
+[*] keys: INSERT menu, END unload, aim key HELD to aim
+[*] waiting for game       (0.0s)
+[*] attaching             (1.0s)
+[*] attached: pid 25184  base 0x7FF6XXXXXXXX
+[*] waiting for uworld    (0.0s)
+[*] scanning for uworld   (0.2s)
 [*] UWorld scan prepared: 6 writable section(s), 41.3 MiB total
 [*] UWorld resolved by scan: base+0x10AEC0B8 -> 0x1F2A...
+[*] waiting for match     (0.5s)
+[*] probing layout        (0.4s)
 [*] relative block: float32 (3 floats + 4 pad per 0x18 slot)
+[*] ready                 (0.4s)
 ```
+
+A cadeia é sempre a mesma, e cada etapa tem um nome fixo — se travar, o painel diz
+em qual delas:
+
+| etapa | % | esperando por |
+|---|---|---|
+| `waiting for game` | 10 | o processo do jogo existir |
+| `attaching` | 25 | `OpenProcess` + `EnumProcessModules` (precisa de admin) |
+| `waiting for uworld` | 40 | o estático GWorld (offset validado, depois `--uworld`) |
+| `scanning for uworld` | 40 → 80 | a varredura limitada, proporcional às seções já lidas |
+| `waiting for match` | 85 | um pawn local (lobby / tela de carregamento) |
+| `probing layout` | 92 | float32 vs float64 no root component do pawn |
+| `ready` | 100 | aim e ESP liberados |
+
+O programa **não trava** esperando o jogo: você pode abrir antes do Fortnite, o
+overlay já aparece mostrando a etapa atual, e ele tenta o `OpenProcess` de novo a
+cada 1 s. Quando a cadeia chega em `ready`, o painel se esconde sozinho (dá pra
+religar em *Misc* → `show startup panel`). Se o jogo fechar, ele percebe em até
+500 ms, fecha o handle, descarta todos os ponteiros em cache e volta pra
+`waiting for game`.
 
 a linha `relative block` é a que resolve o dúvida que estava no código: o dump dá
 o espaçamento (0x18) mas não diz se são 3 floats ou 3 doubles. Agora ele testa

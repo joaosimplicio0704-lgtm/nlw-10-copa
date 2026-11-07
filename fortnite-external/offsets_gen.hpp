@@ -16,35 +16,34 @@
 
 namespace off
 {
-    constexpr uintptr_t GameInstance           = 0x248;  // World::OwningGameInstance
-    constexpr uintptr_t GameState              = 0x1D0;  // World::GameState
-    constexpr uintptr_t LocalPlayers           = 0x38;  // GameInstance::LocalPlayers
-    constexpr uintptr_t PlayerArray            = 0x290;  // GameStateBase::PlayerArray
-    constexpr uintptr_t LocalPawn              = 0x2B8;  // Controller::Pawn
-    constexpr uintptr_t PlayerState            = 0x298;  // Pawn::PlayerState
-    constexpr uintptr_t BaseEyeHeight          = 0x284;  // Pawn::BaseEyeHeight
-    constexpr uintptr_t Mesh                   = 0x2F8;  // Character::Mesh
-    constexpr uintptr_t RootComponent          = 0x1B0;  // Actor::RootComponent
-    constexpr uintptr_t AttachParent           = 0xD0;  // SceneComponent::AttachParent
-    constexpr uintptr_t RelativeLocation       = 0x140;  // SceneComponent::RelativeLocation
-    constexpr uintptr_t RelativeRotation       = 0x158;  // SceneComponent::RelativeRotation
-    constexpr uintptr_t RelativeScale3D        = 0x170;  // SceneComponent::RelativeScale3D
-    constexpr uintptr_t BoneSpaceTransforms    = 0x9B8;  // SkeletalMeshComponent::CachedBoneSpaceTransforms
-    constexpr uintptr_t ComponentSpaceTransforms = 0x9C8;  // SkeletalMeshComponent::CachedComponentSpaceTransforms
-    constexpr uintptr_t RecentlyRendered       = 0x7E1;  // SkinnedMeshComponent::bRecentlyRendered
-    constexpr uintptr_t PawnPrivate            = 0x2F0;  // PlayerState::PawnPrivate
-    constexpr uintptr_t TeamIndex              = 0xF81;  // FortPlayerStateAthena::TeamIndex
-    constexpr uintptr_t bIsSpectator           = 0x282;  // PlayerState::bIsSpectator
-    constexpr uintptr_t HealthSet              = 0x1430;  // FortPawn::HealthSet
-    constexpr uintptr_t Health                 = 0x48;  // FortHealthSet::Health
-    constexpr uintptr_t MaxHealth              = 0x70;  // FortHealthSet::MaxHealth
-    constexpr uintptr_t CapsuleHalfHeight      = 0x1E8C;  // FortPawn::CapsuleHalfHeightFortPawn
-    constexpr uintptr_t PlayerCameraManager    = 0x330;  // PlayerController::PlayerCameraManager
-    constexpr uintptr_t CameraCachePrivate     = 0x15A0;  // PlayerCameraManager::CameraCachePrivate
-    constexpr uintptr_t CameraPOV              = 0x10;  // CameraCacheEntry::POV
-    constexpr uintptr_t CameraLocation         = 0x0;  // MinimalViewInfo::Location
-    constexpr uintptr_t CameraRotation         = 0x18;  // MinimalViewInfo::Rotation
-    constexpr uintptr_t CameraFOV              = 0x30;  // MinimalViewInfo::FOV
+    [[maybe_unused]] constexpr uintptr_t GameInstance           = 0x248;  // World::OwningGameInstance
+    [[maybe_unused]] constexpr uintptr_t GameState              = 0x1D0;  // World::GameState
+    [[maybe_unused]] constexpr uintptr_t LocalPlayers           = 0x38;  // GameInstance::LocalPlayers
+    [[maybe_unused]] constexpr uintptr_t PlayerArray            = 0x290;  // GameStateBase::PlayerArray
+    [[maybe_unused]] constexpr uintptr_t LocalPawn              = 0x2B8;  // Controller::Pawn
+    [[maybe_unused]] constexpr uintptr_t PlayerState            = 0x298;  // Pawn::PlayerState
+    [[maybe_unused]] constexpr uintptr_t BaseEyeHeight          = 0x284;  // Pawn::BaseEyeHeight
+    [[maybe_unused]] constexpr uintptr_t Mesh                   = 0x2F8;  // Character::Mesh
+    [[maybe_unused]] constexpr uintptr_t RootComponent          = 0x1B0;  // Actor::RootComponent
+    [[maybe_unused]] constexpr uintptr_t AttachParent           = 0xD0;  // SceneComponent::AttachParent
+    [[maybe_unused]] constexpr uintptr_t RelativeLocation       = 0x140;  // SceneComponent::RelativeLocation
+    [[maybe_unused]] constexpr uintptr_t RelativeRotation       = 0x158;  // SceneComponent::RelativeRotation
+    [[maybe_unused]] constexpr uintptr_t RelativeScale3D        = 0x170;  // SceneComponent::RelativeScale3D
+    [[maybe_unused]] constexpr uintptr_t RecentlyRendered       = 0x7E1;  // SkinnedMeshComponent::bRecentlyRendered
+    [[maybe_unused]] constexpr uintptr_t PawnPrivate            = 0x2F0;  // PlayerState::PawnPrivate
+    [[maybe_unused]] constexpr uintptr_t TeamIndex              = 0xF81;  // FortPlayerStateAthena::TeamIndex
+    [[maybe_unused]] constexpr uintptr_t BoneSpaceTransforms    = 0x9B8;  // SkeletalMeshComponent::CachedBoneSpaceTransforms
+    [[maybe_unused]] constexpr uintptr_t ComponentSpaceTransforms = 0x9C8;  // SkeletalMeshComponent::CachedComponentSpaceTransforms
+    [[maybe_unused]] constexpr uintptr_t HealthSet              = 0x1430;  // FortPawn::HealthSet
+    [[maybe_unused]] constexpr uintptr_t Health                 = 0x48;  // FortHealthSet::Health
+    [[maybe_unused]] constexpr uintptr_t MaxHealth              = 0x70;  // FortHealthSet::MaxHealth
+    [[maybe_unused]] constexpr uintptr_t CapsuleHalfHeight      = 0x1E8C;  // FortPawn::CapsuleHalfHeightFortPawn
+    [[maybe_unused]] constexpr uintptr_t PlayerCameraManager    = 0x330;  // PlayerController::PlayerCameraManager
+    [[maybe_unused]] constexpr uintptr_t CameraCachePrivate     = 0x15A0;  // PlayerCameraManager::CameraCachePrivate
+    [[maybe_unused]] constexpr uintptr_t CameraPOV              = 0x10;  // CameraCacheEntry::POV
+    [[maybe_unused]] constexpr uintptr_t CameraLocation         = 0x0;  // MinimalViewInfo::Location
+    [[maybe_unused]] constexpr uintptr_t CameraRotation         = 0x18;  // MinimalViewInfo::Rotation
+    [[maybe_unused]] constexpr uintptr_t CameraFOV              = 0x30;  // MinimalViewInfo::FOV
 
     // FILL: UWorld — not present: the dump has no globals section, so the GWorld static
     //   is unknown for this build. Get it for your patch:
@@ -60,7 +59,7 @@ namespace off
     //   and refuses the value otherwise. Values floating around on forums
     //   (e.g. 0x1C8E1578) are unverified for v43.00 — pass them on the
     //   command line (--uworld 0x...) and watch the console verdict.
-    constexpr uintptr_t UWorld                 = 0x0;
+    [[maybe_unused]] constexpr uintptr_t UWorld                 = 0x0;
     // FILL: BoneArray — not present, and CachedBoneSpaceTransforms is not a substitute:
     //   the dump does not say whether it holds component-space or bone-space
     //   transforms, nor whether the element stride is FTransform (0x60,
@@ -78,7 +77,7 @@ namespace off
     //      dump) — read it once and assert index < NumBones.
     //   Then set cfg::kBoneWorldLocations = true and wire bone_id through
     //   bone_world_location() (the hook is in place, guarded).
-    constexpr uintptr_t BoneArray              = 0x0;
+    [[maybe_unused]] constexpr uintptr_t BoneArray              = 0x0;
 }
 
 namespace off_layout

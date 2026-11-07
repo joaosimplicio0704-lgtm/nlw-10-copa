@@ -88,6 +88,8 @@ namespace cfg
     constexpr const wchar_t* kProcessName = L"FortniteClient-Win64-Shipping.exe";
 
     constexpr int   kTickMs        = 4;              // poll rate (Sleep floor per loop)
+    constexpr int   kAttachRetryMs = 1000;           // between OpenProcess attempts
+    constexpr int   kAliveCheckMs  = 500;            // between module-header liveness reads
     constexpr int   kAimKey        = VK_RBUTTON;     // held
     constexpr int   kMenuKey       = VK_INSERT;      // toggle
     constexpr int   kExitKey       = VK_END;         // hard unload
@@ -173,35 +175,34 @@ namespace cfg
 
 namespace off
 {
-    constexpr uintptr_t GameInstance           = 0x248;  // World::OwningGameInstance
-    constexpr uintptr_t GameState              = 0x1D0;  // World::GameState
-    constexpr uintptr_t LocalPlayers           = 0x38;  // GameInstance::LocalPlayers
-    constexpr uintptr_t PlayerArray            = 0x290;  // GameStateBase::PlayerArray
-    constexpr uintptr_t LocalPawn              = 0x2B8;  // Controller::Pawn
-    constexpr uintptr_t PlayerState            = 0x298;  // Pawn::PlayerState
-    constexpr uintptr_t BaseEyeHeight          = 0x284;  // Pawn::BaseEyeHeight
-    constexpr uintptr_t Mesh                   = 0x2F8;  // Character::Mesh
-    constexpr uintptr_t RootComponent          = 0x1B0;  // Actor::RootComponent
-    constexpr uintptr_t AttachParent           = 0xD0;  // SceneComponent::AttachParent
-    constexpr uintptr_t RelativeLocation       = 0x140;  // SceneComponent::RelativeLocation
-    constexpr uintptr_t RelativeRotation       = 0x158;  // SceneComponent::RelativeRotation
-    constexpr uintptr_t RelativeScale3D        = 0x170;  // SceneComponent::RelativeScale3D
-    constexpr uintptr_t BoneSpaceTransforms    = 0x9B8;  // SkeletalMeshComponent::CachedBoneSpaceTransforms
-    constexpr uintptr_t ComponentSpaceTransforms = 0x9C8;  // SkeletalMeshComponent::CachedComponentSpaceTransforms
-    constexpr uintptr_t RecentlyRendered       = 0x7E1;  // SkinnedMeshComponent::bRecentlyRendered
-    constexpr uintptr_t PawnPrivate            = 0x2F0;  // PlayerState::PawnPrivate
-    constexpr uintptr_t TeamIndex              = 0xF81;  // FortPlayerStateAthena::TeamIndex
-    constexpr uintptr_t bIsSpectator           = 0x282;  // PlayerState::bIsSpectator
-    constexpr uintptr_t HealthSet              = 0x1430;  // FortPawn::HealthSet
-    constexpr uintptr_t Health                 = 0x48;  // FortHealthSet::Health
-    constexpr uintptr_t MaxHealth              = 0x70;  // FortHealthSet::MaxHealth
-    constexpr uintptr_t CapsuleHalfHeight      = 0x1E8C;  // FortPawn::CapsuleHalfHeightFortPawn
-    constexpr uintptr_t PlayerCameraManager    = 0x330;  // PlayerController::PlayerCameraManager
-    constexpr uintptr_t CameraCachePrivate     = 0x15A0;  // PlayerCameraManager::CameraCachePrivate
-    constexpr uintptr_t CameraPOV              = 0x10;  // CameraCacheEntry::POV
-    constexpr uintptr_t CameraLocation         = 0x0;  // MinimalViewInfo::Location
-    constexpr uintptr_t CameraRotation         = 0x18;  // MinimalViewInfo::Rotation
-    constexpr uintptr_t CameraFOV              = 0x30;  // MinimalViewInfo::FOV
+    [[maybe_unused]] constexpr uintptr_t GameInstance           = 0x248;  // World::OwningGameInstance
+    [[maybe_unused]] constexpr uintptr_t GameState              = 0x1D0;  // World::GameState
+    [[maybe_unused]] constexpr uintptr_t LocalPlayers           = 0x38;  // GameInstance::LocalPlayers
+    [[maybe_unused]] constexpr uintptr_t PlayerArray            = 0x290;  // GameStateBase::PlayerArray
+    [[maybe_unused]] constexpr uintptr_t LocalPawn              = 0x2B8;  // Controller::Pawn
+    [[maybe_unused]] constexpr uintptr_t PlayerState            = 0x298;  // Pawn::PlayerState
+    [[maybe_unused]] constexpr uintptr_t BaseEyeHeight          = 0x284;  // Pawn::BaseEyeHeight
+    [[maybe_unused]] constexpr uintptr_t Mesh                   = 0x2F8;  // Character::Mesh
+    [[maybe_unused]] constexpr uintptr_t RootComponent          = 0x1B0;  // Actor::RootComponent
+    [[maybe_unused]] constexpr uintptr_t AttachParent           = 0xD0;  // SceneComponent::AttachParent
+    [[maybe_unused]] constexpr uintptr_t RelativeLocation       = 0x140;  // SceneComponent::RelativeLocation
+    [[maybe_unused]] constexpr uintptr_t RelativeRotation       = 0x158;  // SceneComponent::RelativeRotation
+    [[maybe_unused]] constexpr uintptr_t RelativeScale3D        = 0x170;  // SceneComponent::RelativeScale3D
+    [[maybe_unused]] constexpr uintptr_t RecentlyRendered       = 0x7E1;  // SkinnedMeshComponent::bRecentlyRendered
+    [[maybe_unused]] constexpr uintptr_t PawnPrivate            = 0x2F0;  // PlayerState::PawnPrivate
+    [[maybe_unused]] constexpr uintptr_t TeamIndex              = 0xF81;  // FortPlayerStateAthena::TeamIndex
+    [[maybe_unused]] constexpr uintptr_t BoneSpaceTransforms    = 0x9B8;  // SkeletalMeshComponent::CachedBoneSpaceTransforms
+    [[maybe_unused]] constexpr uintptr_t ComponentSpaceTransforms = 0x9C8;  // SkeletalMeshComponent::CachedComponentSpaceTransforms
+    [[maybe_unused]] constexpr uintptr_t HealthSet              = 0x1430;  // FortPawn::HealthSet
+    [[maybe_unused]] constexpr uintptr_t Health                 = 0x48;  // FortHealthSet::Health
+    [[maybe_unused]] constexpr uintptr_t MaxHealth              = 0x70;  // FortHealthSet::MaxHealth
+    [[maybe_unused]] constexpr uintptr_t CapsuleHalfHeight      = 0x1E8C;  // FortPawn::CapsuleHalfHeightFortPawn
+    [[maybe_unused]] constexpr uintptr_t PlayerCameraManager    = 0x330;  // PlayerController::PlayerCameraManager
+    [[maybe_unused]] constexpr uintptr_t CameraCachePrivate     = 0x15A0;  // PlayerCameraManager::CameraCachePrivate
+    [[maybe_unused]] constexpr uintptr_t CameraPOV              = 0x10;  // CameraCacheEntry::POV
+    [[maybe_unused]] constexpr uintptr_t CameraLocation         = 0x0;  // MinimalViewInfo::Location
+    [[maybe_unused]] constexpr uintptr_t CameraRotation         = 0x18;  // MinimalViewInfo::Rotation
+    [[maybe_unused]] constexpr uintptr_t CameraFOV              = 0x30;  // MinimalViewInfo::FOV
 
     // FILL: UWorld — not present: the dump has no globals section, so the GWorld static
     //   is unknown for this build. Get it for your patch:
@@ -217,7 +218,7 @@ namespace off
     //   and refuses the value otherwise. Values floating around on forums
     //   (e.g. 0x1C8E1578) are unverified for v43.00 — pass them on the
     //   command line (--uworld 0x...) and watch the console verdict.
-    constexpr uintptr_t UWorld                 = 0x0;
+    [[maybe_unused]] constexpr uintptr_t UWorld                 = 0x0;
     // FILL: BoneArray — not present, and CachedBoneSpaceTransforms is not a substitute:
     //   the dump does not say whether it holds component-space or bone-space
     //   transforms, nor whether the element stride is FTransform (0x60,
@@ -235,7 +236,7 @@ namespace off
     //      dump) — read it once and assert index < NumBones.
     //   Then set cfg::kBoneWorldLocations = true and wire bone_id through
     //   bone_world_location() (the hook is in place, guarded).
-    constexpr uintptr_t BoneArray              = 0x0;
+    [[maybe_unused]] constexpr uintptr_t BoneArray              = 0x0;
 }
 
 namespace off_layout
@@ -263,6 +264,7 @@ namespace settings
     inline int center_y = 0;
 
     inline bool show_menu = true;
+    inline bool show_status = true;      // startup panel; auto-hides once Ready
     inline int  tab = 0;
 
     namespace aimbot
@@ -299,20 +301,32 @@ public:
 
     ~Mem() { detach(); }
 
+    // Why the last attach() failed, for the status panel. Empty on success.
+    char last_error[160] = { 0 };
+
     bool attach(const wchar_t* process_name)
     {
         detach();
+        last_error[0] = '\0';
 
         pid = find_pid(process_name);
-        if (!pid) return false;
+        if (!pid) return false;                    // not running: not an error
 
         hproc = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
-        if (!hproc) return false;
+        if (!hproc)
+        {
+            const DWORD err = GetLastError();
+            snprintf(last_error, sizeof(last_error), "OpenProcess failed (%lu)%s", err,
+                     err == ERROR_ACCESS_DENIED ? " - run elevated" : "");
+            pid = 0;
+            return false;
+        }
 
         HMODULE mods[1024];
         DWORD needed = 0;
         if (!EnumProcessModules(hproc, mods, sizeof(mods), &needed) || needed < sizeof(HMODULE))
         {
+            snprintf(last_error, sizeof(last_error), "EnumProcessModules failed (%lu)", GetLastError());
             detach();
             return false;
         }
@@ -320,6 +334,7 @@ public:
         base = reinterpret_cast<uintptr_t>(mods[0]);
         if (!base)
         {
+            snprintf(last_error, sizeof(last_error), "EnumProcessModules returned a null base");
             detach();
             return false;
         }
@@ -615,6 +630,37 @@ namespace cache
 
     inline bool      uworld_ready = false;
     inline ULONGLONG last_resolve_ms = 0;
+
+    // Everything here points into the process we just lost. Called on attach and
+    // on detach so no stale pointer survives into the next process.
+    inline void reset()
+    {
+        uworld = 0;
+        game_instance = 0;
+        local_players = 0;
+        player_controller = 0;
+        local_pawn = 0;
+        player_state = 0;
+        game_state = 0;
+        player_array = 0;
+        player_count = 0;
+
+        my_team_id = 0;
+        my_team_valid = false;
+
+        closest_distance = DBL_MAX;
+        closest_mesh = 0;
+        closest_pawn = 0;
+        closest_aim = Vector3();
+        closest_centre = Vector3();
+        closest_half = 0.0;
+        closest_visible = false;
+
+        camera = Camera{};
+
+        uworld_ready = false;
+        last_resolve_ms = 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -990,6 +1036,17 @@ namespace scanner
     inline ULONGLONG now_ms()
     {
         return GetTickCount64();
+    }
+
+    // Start over on a new process (the sections belong to the old image).
+    inline void reset()
+    {
+        sections.clear();
+        index = 0;
+        cursor = 0;
+        prepared = false;
+        exhausted = false;
+        next_step_ms = 0;
     }
 
     inline bool prepare(uintptr_t module_base)
@@ -1896,6 +1953,316 @@ namespace config
 }
 
 // ---------------------------------------------------------------------------
+//  status — one place that knows what the program is currently doing
+//
+//  The startup sequence is non-blocking now: waiting for the game, opening the
+//  handle, resolving UWorld and probing the float/double layout all happen inside
+//  the main loop, so the overlay, the menu and the console stay live the whole
+//  time instead of freezing on a Sleep loop. Everything below reads this state.
+// ---------------------------------------------------------------------------
+namespace status
+{
+    enum class Stage
+    {
+        Booting = 0,        // console + overlay coming up
+        WaitingForGame,     // process not running yet
+        Attaching,          // process found, opening the handle
+        WaitingForWorld,    // handle open, UWorld not resolved
+        Scanning,           // bounded UWorld scan in progress
+        WaitingForMatch,    // world up, no local pawn yet (lobby / loading)
+        ProbingLayout,      // pawn found, deciding float32 vs float64
+        Ready,              // everything validated, aim/ESP live
+        Failed,             // unrecoverable, see detail()
+    };
+
+    inline Stage     stage = Stage::Booting;
+    inline char      detail[192] = { 0 };
+    inline ULONGLONG since_ms = 0;       // when the current stage was entered
+    inline int       reattaches = 0;
+    inline ULONGLONG last_attempt_ms = 0;
+
+    inline const char* name(Stage s)
+    {
+        switch (s)
+        {
+        case Stage::Booting:          return "booting";
+        case Stage::WaitingForGame:   return "waiting for game";
+        case Stage::Attaching:        return "attaching";
+        case Stage::WaitingForWorld:  return "waiting for uworld";
+        case Stage::Scanning:         return "scanning for uworld";
+        case Stage::WaitingForMatch:  return "waiting for match";
+        case Stage::ProbingLayout:    return "probing layout";
+        case Stage::Ready:            return "ready";
+        case Stage::Failed:           return "failed";
+        }
+        return "?";
+    }
+
+    // 0..100, what the startup progress bar shows. Deliberately coarse: each step
+    // is either done or not, the scan is the only one with real granularity.
+    inline int progress()
+    {
+        switch (stage)
+        {
+        case Stage::Booting:          return 5;
+        case Stage::WaitingForGame:   return 10;
+        case Stage::Attaching:        return 25;
+        case Stage::WaitingForWorld:  return 40;
+        case Stage::Scanning:
+        {
+            const size_t total = scanner::sections.size();
+            const size_t done = scanner::index;
+            return total ? 40 + static_cast<int>(40.0 * static_cast<double>(done) / static_cast<double>(total))
+                         : 45;
+        }
+        case Stage::WaitingForMatch:  return 85;
+        case Stage::ProbingLayout:    return 92;
+        case Stage::Ready:            return 100;
+        case Stage::Failed:           return 0;
+        }
+        return 0;
+    }
+
+    // What each step is looking for, short enough for a menu row.
+    inline const char* what()
+    {
+        switch (stage)
+        {
+        case Stage::Booting:          return "console + overlay";
+        case Stage::WaitingForGame:   return "FortniteClient-Win64-Shipping.exe";
+        case Stage::Attaching:        return "OpenProcess(PROCESS_VM_READ)";
+        case Stage::WaitingForWorld:  return "UWorld static";
+        case Stage::Scanning:         return "UWorld in .data";
+        case Stage::WaitingForMatch:  return "local pawn";
+        case Stage::ProbingLayout:    return "relative transform layout";
+        case Stage::Ready:            return "aim + esp";
+        case Stage::Failed:           return "see console";
+        }
+        return "";
+    }
+
+    inline double elapsed_s()
+    {
+        return (GetTickCount64() - since_ms) / 1000.0;
+    }
+
+    inline void set(Stage s, const char* why = nullptr)
+    {
+        if (s == stage && (!why || strncmp(detail, why, sizeof(detail) - 1) == 0)) return;
+
+        stage = s;
+        since_ms = GetTickCount64();
+
+        if (why) { strncpy_s(detail, why, sizeof(detail) - 1); }
+        else detail[0] = '\0';
+
+        // console line per transition, with elapsed time in the previous stage
+        printf("[*] %-22s (%.1fs)\n", name(stage), elapsed_s());
+        fflush(stdout);
+    }
+
+    // Same stage again, only refresh the explanation. Does not re-print, so a
+    // per-frame caller can keep the detail line current without spamming stdout.
+    inline void note(Stage s, const char* why = nullptr)
+    {
+        if (s != stage) { set(s, why); return; }
+
+        if (why && strncmp(detail, why, sizeof(detail) - 1) != 0)
+        {
+            strncpy_s(detail, why, sizeof(detail) - 1);
+        }
+        else if (!why)
+        {
+            detail[0] = '\0';
+        }
+    }
+
+    inline void fail(const char* why)
+    {
+        set(Stage::Failed, why);
+        printf("[!] %s\n", why ? why : "failed");
+        fflush(stdout);
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  bootstrap — one non-blocking step per loop iteration
+//
+//  Replaces the old `while (!mem.attach(...)) Sleep(500);` that froze the program
+//  (and the overlay) until the game was up. Each call advances at most one stage
+//  and returns immediately.
+// ---------------------------------------------------------------------------
+// ULocalPlayer::PlayerController is not in this dump; 0x30 is the long-standing
+// offset and is validation-gated (camera + pawn must resolve through it).
+// FILL: print ULocalPlayer+0x00..0x80 with a known controller and confirm; the
+//       walk fails safe while it is wrong.
+constexpr uintptr_t kLocalPlayerController = 0x30;
+
+// world -> GameInstance -> LocalPlayers[0] -> PlayerController -> Pawn.
+// Read-only, bounded (one TArray element, not the whole array), and every hop is
+// validated. Returns 0 at the first hop that does not make sense.
+inline uintptr_t local_pawn_from_world()
+{
+    if (!mem.alive() || !looks_like_uworld(cache::uworld)) return 0;
+
+    uintptr_t gi = 0;
+    if (!mem.read(cache::uworld + off::GameInstance, gi) || !Mem::plausible_ptr(gi)) return 0;
+
+    uintptr_t players = 0;      // TArray<ULocalPlayer*>
+    if (!mem.read(gi + off::LocalPlayers, players) || !Mem::plausible_ptr(players)) return 0;
+
+    int num = 0, max = 0;
+    if (!mem.read(players + 0x08, num) || !mem.read(players + 0x0C, max)) return 0;
+    if (num < 1 || num > static_cast<int>(cfg::kMaxPlayers) || max < num) return 0;
+
+    uintptr_t local_player = 0;
+    if (!mem.read(players, local_player) || !Mem::plausible_ptr(local_player)) return 0;
+
+    uintptr_t pc = 0;
+    if (!mem.read(local_player + kLocalPlayerController, pc) || !Mem::plausible_ptr(pc)) return 0;
+
+    uintptr_t pawn = 0;
+    if (!mem.read(pc + off::LocalPawn, pawn) || !Mem::plausible_ptr(pawn)) return 0;
+
+    return pawn;
+}
+
+inline void bootstrap_tick(uintptr_t uworld_override, bool& tried_override)
+{
+    // -- 1: the process. Nothing else can happen while the handle is closed ----
+    if (!mem.alive())
+    {
+        status::note(status::Stage::WaitingForGame);
+
+        const ULONGLONG now = GetTickCount64();
+        if (now - status::last_attempt_ms < cfg::kAttachRetryMs) return;
+        status::last_attempt_ms = now;
+
+        status::set(status::Stage::Attaching);
+
+        if (!mem.attach(cfg::kProcessName))
+        {
+            // "not running" is the normal case and needs no message; a real
+            // failure (access denied, PSAPI) does, and it goes in the panel.
+            status::set(status::Stage::WaitingForGame,
+                        mem.last_error[0] ? mem.last_error : nullptr);
+            return;
+        }
+
+        printf("[*] attached: pid %lu  base 0x%llX\n", static_cast<unsigned long>(mem.pid),
+               static_cast<unsigned long long>(mem.base));
+
+        // fresh process: everything derived from the old one is invalid
+        cache::reset();
+        scanner::reset();
+        overlay::game_wnd = overlay::find_process_window(mem.pid);
+        tried_override = false;
+
+        status::set(status::Stage::WaitingForWorld);
+        return;
+    }
+
+    // -- 2: handle open, but the game may have exited under it. One cheap read
+    //       of the module header every half second tells us, so a restart is
+    //       noticed instead of silently reading a dead handle forever. --------
+    {
+        static ULONGLONG next_liveness = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now >= next_liveness)
+        {
+            next_liveness = now + static_cast<ULONGLONG>(cfg::kAliveCheckMs);
+
+            IMAGE_DOS_HEADER dos{};
+            if (!mem.read_raw(mem.base, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE)
+            {
+                mem.detach();
+                cache::reset();
+                scanner::reset();
+                status::set(status::Stage::WaitingForGame, "process exited");
+                return;
+            }
+        }
+    }
+
+    // -- 3: UWorld. --uworld is tried once, then the validated offset, then the
+    //       bounded scan. Never an unbounded per-tick walk of the module. -----
+    if (!cache::uworld_ready)
+    {
+        if (uworld_override && !tried_override)
+        {
+            tried_override = true;
+
+            uintptr_t world = 0;
+            if (mem.read(mem.base + uworld_override, world) && looks_like_uworld(world))
+            {
+                cache::uworld = world;
+                cache::uworld_ready = true;
+                printf("[*] UWorld accepted from --uworld: 0x%llX\n",
+                       static_cast<unsigned long long>(world));
+            }
+            else
+            {
+                printf("[!] --uworld 0x%llX rejected by validation (wrong for this build?)\n",
+                       static_cast<unsigned long long>(uworld_override));
+            }
+        }
+
+        if (!cache::uworld_ready)
+        {
+            cache::uworld = resolve_uworld();
+            cache::uworld_ready = cache::uworld != 0;
+        }
+
+        if (!cache::uworld_ready)
+        {
+            // show the scan's own progress while it is the thing running
+            status::set(scanner::prepared && !scanner::exhausted ? status::Stage::Scanning
+                                                                : status::Stage::WaitingForWorld,
+                        scanner::exhausted ? "scan finished, use --uworld (see README)" : nullptr);
+            return;
+        }
+
+        status::set(status::Stage::WaitingForMatch);
+    }
+
+    // -- 4: the transform layout probe needs the local pawn, so it needs a match
+    if (layout::relative == VecLayout::Unknown)
+    {
+        const uintptr_t pawn = local_pawn_from_world();
+        uintptr_t root = 0;
+
+        if (!pawn)
+        {
+            status::note(status::Stage::WaitingForMatch, "no local pawn yet (lobby or loading)");
+            return;
+        }
+
+        if (!mem.read(pawn + off::RootComponent, root) || !Mem::plausible_ptr(root))
+        {
+            status::note(status::Stage::WaitingForMatch, "local pawn has no RootComponent");
+            return;
+        }
+
+        status::set(status::Stage::ProbingLayout);
+        layout::relative = probe_vec_layout(root);
+
+        if (layout::relative == VecLayout::Float32)
+            printf("[*] relative block: float32 (3 floats + 4 pad per 0x18 slot)\n");
+        else if (layout::relative == VecLayout::Float64)
+            printf("[*] relative block: float64 (3 doubles + 8 pad per 0x18 slot)\n");
+
+        if (layout::relative == VecLayout::Unknown)
+        {
+            status::set(status::Stage::WaitingForMatch,
+                        "transform layout unreadable, will retry (try a few distant objects)");
+            return;
+        }
+    }
+
+    status::note(status::Stage::Ready);
+}
+
+// ---------------------------------------------------------------------------
 //  game logic
 // ---------------------------------------------------------------------------
 inline bool game_foreground()
@@ -2004,15 +2371,14 @@ inline void game_tick()
     if (!mem.read(cache::game_instance + off::LocalPlayers, local_players)) return;
     if (!Mem::plausible_ptr(local_players)) return;
 
+    // TArray<ULocalPlayer*>: Data, Num, Max — Num is checked before Data[0]
+    int lp_num = 0, lp_max = 0;
+    if (!mem.read(local_players + 0x08, lp_num) || !mem.read(local_players + 0x0C, lp_max)) return;
+    if (lp_num < 1 || lp_num > static_cast<int>(cfg::kMaxPlayers) || lp_max < lp_num) return;
+
     cache::local_players = 0;
     if (!mem.read(local_players, cache::local_players)) return;
     if (!Mem::plausible_ptr(cache::local_players)) return;
-
-    // ULocalPlayer::PlayerController is not in this dump; 0x30 is the long-standing
-    // offset and is validation-gated below (camera + pawn must resolve through it).
-    // FILL: print ULocalPlayer+0x00..0x80 with a known controller and confirm; the
-    //       walk fails safe if it is wrong.
-    constexpr uintptr_t kLocalPlayerController = 0x30;
 
     cache::player_controller = 0;
     if (!mem.read(cache::local_players + kLocalPlayerController, cache::player_controller)) return;
@@ -2269,6 +2635,94 @@ inline void aimbot()
 }
 
 // ---------------------------------------------------------------------------
+//  status panel — drawn over the game while the chain comes up
+//
+//  This is the overlay answer to "is it alive / what is it doing": a progress bar
+//  for the startup chain plus one row per step, so a stuck stage is visible
+//  without alt-tabbing to the console.
+// ---------------------------------------------------------------------------
+inline void render_status_panel()
+{
+    // Stays up until the chain is Ready once, then hides itself so it does not
+    // sit on top of the game forever. Misc -> "show startup panel" brings it back.
+    static bool hid_once = false;
+    if (status::stage == status::Stage::Ready && !hid_once)
+    {
+        hid_once = true;
+        settings::show_status = false;
+    }
+    if (!settings::show_status) return;
+
+    constexpr float w = 340.f, h = 196.f;
+    const float x = 24.f;
+    const float y = 24.f;
+
+    draw::rect_filled(x, y, w, h, ui::kColBg);
+    draw::rect(x, y, w, h, ui::kColBorder);
+    draw::rect_filled(x, y, w, 20.f, ui::kColPanel);
+    draw::text(x + 8.f, y + 3.f, ui::kColText, "fortnite external - startup");
+
+    const int pct = status::progress();
+    char line[160];
+
+    // progress bar
+    const float bar_x = x + 12.f, bar_y = y + 28.f, bar_w = w - 24.f, bar_h = 8.f;
+    draw::rect_filled(bar_x, bar_y, bar_w, bar_h, ui::kColFrame);
+    draw::rect_filled(bar_x, bar_y, bar_w * (static_cast<float>(pct) / 100.f), bar_h,
+                      pct >= 100 ? D3DCOLOR_ARGB(255, 90, 220, 120) : ui::kColAccent);
+    snprintf(line, sizeof(line), "%d%%", pct);
+    draw::text(bar_x + bar_w - draw::text_width(line) - 2.f, bar_y - 15.f, ui::kColTextDim, line);
+
+    // current stage + what it is waiting for
+    snprintf(line, sizeof(line), "%-20s %.1fs", status::name(status::stage), status::elapsed_s());
+    draw::text(bar_x, bar_y + 16.f, ui::kColText, line);
+    draw::text(bar_x, bar_y + 32.f, ui::kColTextDim, status::what());
+
+    if (status::detail[0])
+        draw::text(bar_x, bar_y + 46.f, ui::kColTextDim, status::detail);
+
+    // one row per link in the chain
+    struct Row { const char* label; bool done; char value[64]; };
+    Row rows[5];
+
+    rows[0] = { "game process", mem.alive(), "not running" };
+    if (mem.alive())
+        snprintf(rows[0].value, sizeof(rows[0].value), "pid %lu, base 0x%llX",
+                 static_cast<unsigned long>(mem.pid),
+                 static_cast<unsigned long long>(mem.base));
+
+    rows[1] = { "process handle", mem.alive(), "closed" };
+    if (mem.alive())
+        snprintf(rows[1].value, sizeof(rows[1].value), "open, read-only");
+
+    rows[2] = { "uworld", cache::uworld_ready, "not resolved" };
+    if (cache::uworld_ready)
+        snprintf(rows[2].value, sizeof(rows[2].value), "0x%llX",
+                 static_cast<unsigned long long>(cache::uworld));
+
+    rows[3] = { "transform layout",
+                layout::relative != VecLayout::Unknown,
+                "unknown" };
+    if (layout::relative == VecLayout::Float32) snprintf(rows[3].value, sizeof(rows[3].value), "float32");
+    if (layout::relative == VecLayout::Float64) snprintf(rows[3].value, sizeof(rows[3].value), "float64");
+
+    rows[4] = { "camera", cache::camera.valid, "no valid pov yet" };
+    if (cache::camera.valid)
+        snprintf(rows[4].value, sizeof(rows[4].value), "%.1f fov, %.0f x %.0f y",
+                 cache::camera.fov, cache::camera.location.x, cache::camera.location.y);
+
+    float ry = bar_y + 72.f;
+    for (const Row& r : rows)
+    {
+        draw::rect_filled(bar_x, ry + 2.f, 7.f, 7.f,
+                          r.done ? D3DCOLOR_ARGB(255, 90, 220, 120) : D3DCOLOR_ARGB(255, 120, 120, 128));
+        draw::text(bar_x + 13.f, ry, ui::kColTextDim, r.label);
+        draw::text(bar_x + 130.f, ry, r.done ? ui::kColText : ui::kColTextDim, r.value);
+        ry += 14.f;
+    }
+}
+
+// ---------------------------------------------------------------------------
 //  menu — same layout/tabs as before, plus config save/load in Misc
 // ---------------------------------------------------------------------------
 inline void render_menu()
@@ -2285,7 +2739,7 @@ inline void render_menu()
     static ULONGLONG status_until = 0;
     static char  status_text[64] = { 0 };
 
-    constexpr float w = 430.f, h = 300.f;
+    constexpr float w = 430.f, h = 330.f;
     constexpr float title_h = 24.f;
 
     draw::rect_filled(win_x, win_y, w, h, ui::kColBg);
@@ -2345,8 +2799,13 @@ inline void render_menu()
     {
         char line[128];
 
+        snprintf(line, sizeof(line), "stage: %s (%d%%)", status::name(status::stage), status::progress());
+        draw::text(x, y, status::stage == status::Stage::Ready ? ui::kColAccent : ui::kColText, line); y += 22.f;
+
         snprintf(line, sizeof(line), "input: SendInput (no driver, no injection)");
         draw::text(x, y, ui::kColTextDim, line); y += 22.f;
+
+        ui::checkbox(x, y, "show startup panel", &settings::show_status); y += 24.f;
 
         snprintf(line, sizeof(line), "uworld: %s", cache::uworld_ready ? "validated" : "not resolved");
         draw::text(x, y, ui::kColTextDim, line); y += 22.f;
@@ -2466,8 +2925,10 @@ inline bool params_dirty(UINT cur_w, int new_w, UINT cur_h, int new_h)
 // ---------------------------------------------------------------------------
 //  main loop
 // ---------------------------------------------------------------------------
-inline void main_loop()
+inline void main_loop(uintptr_t uworld_override)
 {
+    bool override_tried = false;
+
     LARGE_INTEGER freq{}, last{};
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&last);
@@ -2516,39 +2977,26 @@ inline void main_loop()
             break;
         }
 
-        // game handle can go stale (game restart); reattach at a slow cadence
-        if (!mem.alive())
-        {
-            static ULONGLONG last_attach = 0;
-            const ULONGLONG now = GetTickCount64();
-            if (now - last_attach > 2000)
-            {
-                last_attach = now;
-                if (mem.attach(cfg::kProcessName))
-                {
-                    cache::uworld = 0;
-                    cache::uworld_ready = false;
-                    scanner::prepared = false;
-                    scanner::exhausted = false;
-                    overlay::game_wnd = overlay::find_process_window(mem.pid);
-                    layout::relative = VecLayout::Unknown;   // same game, but re-probe on the next tick
-                    printf("[*] attached: pid %lu base 0x%llX\n", static_cast<unsigned long>(mem.pid),
-                           static_cast<unsigned long long>(mem.base));
-                }
-            }
-        }
+        // one bootstrap step per frame: attach / resolve UWorld / probe layout.
+        // Never blocks, so the overlay keeps drawing the current stage instead of
+        // freezing in a Sleep loop while the game loads.
+        bootstrap_tick(uworld_override, override_tried);
 
         draw::reset();
         ui::begin_frame();
 
-        // mouse movement requires: game focused, menu closed, aimbot on, key held
-        const bool aiming = settings::aimbot::enable && !settings::show_menu && focused &&
+        // mouse movement requires: whole chain validated, game focused, menu
+        // closed, aimbot on, key held. Stage::Ready means process + UWorld +
+        // transform layout all checked out, so nothing aims on a half-init state.
+        const bool chain_ready = status::stage == status::Stage::Ready;
+        const bool aiming = chain_ready && settings::aimbot::enable && !settings::show_menu && focused &&
                             (GetAsyncKeyState(settings::aimbot::aim_key) & 0x8000) != 0;
 
-        game_tick();
+        if (chain_ready) game_tick();
 
         if (aiming) aimbot();
 
+        render_status_panel();
         render_menu();
 
         if (overlay::device)
@@ -2614,11 +3062,25 @@ inline void parse_args(int argc, char** argv, uintptr_t& uworld_override, bool& 
     }
 }
 
+// Ctrl+C / console close / logoff would otherwise kill the process with the
+// D3D9Ex device and the process handle still open. Flipping `running` unwinds
+// main_loop so the normal teardown below always runs.
+inline BOOL WINAPI console_ctrl(DWORD type)
+{
+    (void)type;
+    overlay::running = false;
+    return TRUE;
+}
+
 int main(int argc, char** argv)
 {
     SetProcessDPIAware();
+    SetConsoleCtrlHandler(console_ctrl, TRUE);
     SetConsoleTitleA("fortnite external (user mode)");
     timeBeginPeriod(1);
+
+    // line-buffered so the status lines reach the console while the game loads
+    setvbuf(stdout, nullptr, _IOLBF, 0);
 
     settings::width  = GetSystemMetrics(SM_CXSCREEN);
     settings::height = GetSystemMetrics(SM_CYSCREEN);
@@ -2629,147 +3091,48 @@ int main(int argc, char** argv)
     bool force_scan = false;
     parse_args(argc, argv, uworld_override, force_scan);
 
-    printf("[*] waiting for Fortnite...\n");
-    while (!mem.attach(cfg::kProcessName))
-        Sleep(500);
+    status::stage = status::Stage::Booting;
+    status::since_ms = GetTickCount64();
 
-    printf("[*] base 0x%llX  pid %lu\n",
-           static_cast<unsigned long long>(mem.base), static_cast<unsigned long>(mem.pid));
+    printf("[*] fortnite external - user mode, no injection, no driver\n");
+    printf("[*] keys: INSERT menu, END unload, aim key HELD to aim\n");
 
-    if (uworld_override)
-    {
-        const uintptr_t world = [&]() -> uintptr_t {
-            uintptr_t w = 0;
-            if (mem.read(mem.base + uworld_override, w) && looks_like_uworld(w)) return w;
-            return 0;
-        }();
+    // The game does NOT have to be running yet: the loop waits for it and the
+    // overlay is already up, showing the current stage.
+    status::set(status::Stage::WaitingForGame);
 
-        if (world)
-        {
-            cache::uworld = world;
-            cache::uworld_ready = true;
-            printf("[*] UWorld accepted from --uworld: 0x%llX\n", static_cast<unsigned long long>(world));
-        }
-        else
-        {
-            printf("[!] --uworld 0x%llX rejected by validation (wrong for this build?)\n",
-                   static_cast<unsigned long long>(uworld_override));
-        }
-    }
-
-    if (force_scan && !cache::uworld_ready)
-    {
-        printf("[*] --scan: walking the writable sections, 1 MiB per step\n");
-        while (!scanner::exhausted && !cache::uworld_ready)
-        {
-            cache::uworld = scanner::step(mem.base);
-            cache::uworld_ready = cache::uworld != 0;
-            Sleep(static_cast<DWORD>(cfg::kScanRetryMs));
-        }
-    }
-
-    if (!cache::uworld_ready)
-    {
-        cache::uworld = resolve_uworld();
-        cache::uworld_ready = cache::uworld != 0;
-        cache::last_resolve_ms = GetTickCount64();
-
-        if (!cache::uworld_ready)
-            printf("[!] UWorld not resolved yet — menu opens, aim/ESP stay idle. "
-                   "The bounded scan continues in the background.\n");
-    }
-
-    // Decide float32 vs float64 for the relative block (and by extension the POV
-    // vectors) on the local pawn's root component. Doing it once here means every
-    // later read uses one consistent layout instead of guessing per call.
-    {
-        uintptr_t root = 0;
-        bool probed = false;
-
-        for (int attempt = 0; attempt < 40 && !probed; ++attempt)
-        {
-            if (cache::uworld)
-            {
-                uintptr_t gi = 0;
-                if (mem.read(cache::uworld + off::GameInstance, gi) && Mem::plausible_ptr(gi))
-                {
-                    uintptr_t players = 0;
-                    if (mem.read(gi + off::LocalPlayers, players) && Mem::plausible_ptr(players))
-                    {
-                        uintptr_t local_player = 0;
-                        if (mem.read(players, local_player) && Mem::plausible_ptr(local_player))
-                        {
-                            uintptr_t pc = 0;
-                            if (mem.read(local_player + 0x30, pc) && Mem::plausible_ptr(pc))
-                            {
-                                uintptr_t pawn = 0;
-                                if (mem.read(pc + off::LocalPawn, pawn) && Mem::plausible_ptr(pawn))
-                                    mem.read(pawn + off::RootComponent, root);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (Mem::plausible_ptr(root))
-            {
-                layout::relative = probe_vec_layout(root);
-                probed = layout::relative != VecLayout::Unknown;
-            }
-
-            if (!probed) Sleep(500);   // wait for the match to load
-        }
-
-        if (layout::relative == VecLayout::Float32)
-            printf("[*] relative block: float32 (3 floats + 4 pad per 0x18 slot)\n");
-        else if (layout::relative == VecLayout::Float64)
-            printf("[*] relative block: float64 (3 doubles + 8 pad per 0x18 slot)\n");
-        else
-            printf("[!] relative block layout unresolved - aim/ESP stay off. "
-                   "Start this while a match is running, then reload.\n");
-    }
-
-    // bone aim is configured but not wired: say so once, with the offsets to check
-    if (cfg::kBoneWorldLocations && (cfg::kTransformStride < 0x20 || !off::BoneArray))
-    {
-        printf("[!] cfg::kBoneWorldLocations is on but the bone data is not validated:\n"
-               "    kTransformStride=0x%llX (need 0x60 FTransform or 0x30 FTransform3f),\n"
-               "    off::BoneArray=0x%llX (0 = falling back to mesh+0x%llX CachedComponentSpaceTransforms).\n"
-               "    Falling back to capsule aim until those are filled in.\n",
-               static_cast<unsigned long long>(cfg::kTransformStride),
-               static_cast<unsigned long long>(off::BoneArray),
-               static_cast<unsigned long long>(off::BoneSpaceTransforms));
-    }
-
-    overlay::game_wnd = overlay::find_process_window(mem.pid);
     if (!overlay::create_window())
     {
-        printf("[!] overlay window creation failed\n");
-        mem.detach();
+        status::fail("overlay window creation failed");
         timeEndPeriod(1);
         return 1;
     }
 
     if (!overlay::init_device())
     {
-        printf("[!] D3D9Ex device creation failed\n");
+        status::fail("D3D9Ex device creation failed");
         overlay::destroy_window();
-        mem.detach();
         timeEndPeriod(1);
         return 1;
     }
 
     if (!overlay::recreate_font())
     {
-        printf("[!] font creation failed, not running with a null font\n");
+        status::fail("font creation failed, not running with a null font");
         overlay::destroy_device();
         overlay::destroy_window();
-        mem.detach();
         timeEndPeriod(1);
         return 1;
     }
 
-    main_loop();
+    // console hints that only make sense once, before the loop takes over
+    if (uworld_override)
+        printf("[*] --uworld 0x%llX (validated before use)\n",
+               static_cast<unsigned long long>(uworld_override));
+    if (force_scan)
+        printf("[*] --scan: UWorld scan runs up front\n");
+
+    main_loop(uworld_override);
 
     // teardown, in the only order that is safe: font -> device -> d3d -> window
     overlay::release_font();

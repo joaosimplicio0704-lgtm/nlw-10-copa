@@ -68,6 +68,48 @@ Run elevated, game windowed or borderless on the primary monitor. **Start it wit
 a match loaded** if you can: the layout probe needs a live pawn, and until it
 succeeds no world position is trusted (the Misc tab says `layout: UNRESOLVED`).
 
+### Startup is non-blocking, and it tells you where it is
+
+There is no `while (!attach()) Sleep(...)` any more. The overlay comes up first
+and then advances **one bootstrap step per frame**, so it never freezes while the
+game loads and you can always see which link of the chain is missing.
+
+On screen (top-left panel, `show startup panel` in Misc turns it back on):
+
+```
+fortnite external - startup          62%
+[===============                 ]
+scanning for uworld      3.4s
+UWorld in .data
+stage: scanning for uworld (62%)
+game process   pid 25184, base 0x7FF6XXXXXXXX
+process handle open, read-only
+uworld         not resolved
+transform layout unknown
+camera         no valid pov yet
+```
+
+The chain, in order, with the progress each stage reports:
+
+| stage | % | waiting for |
+|---|---|---|
+| `waiting for game` | 10 | `FortniteClient-Win64-Shipping.exe` in the process list |
+| `attaching` | 25 | `OpenProcess(PROCESS_VM_READ)` + `EnumProcessModules` |
+| `waiting for uworld` | 40 | the GWorld static (validated offset, then `--uworld`) |
+| `scanning for uworld` | 40 → 80 | the bounded `.data` scan, proportional to sections covered |
+| `waiting for match` | 85 | a local pawn (lobby / loading screen) |
+| `probing layout` | 92 | float32 vs float64 on the pawn's root component |
+| `ready` | 100 | — aim and ESP are live |
+
+The same names are printed to the console as `[*] <stage> (<elapsed>s)` on every
+transition, so a stuck stage has one obvious name. The panel hides itself the
+first time the chain reaches `ready`.
+
+Attach is retried every second and the layout probe every frame a pawn exists, so
+starting the tool before the game is the supported order. If the game exits, the
+500 ms liveness check on the module header notices, closes the handle, drops every
+cached pointer and drops back to `waiting for game` — no stale reads.
+
 | key | action |
 |---|---|
 | `INSERT` | menu (opens with aimbot/visuals **off**) |
