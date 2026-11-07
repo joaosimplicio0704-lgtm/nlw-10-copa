@@ -123,8 +123,8 @@ Se essa linha não devolver nada, ele não está falando com a internet.
 Para conferir que o arquivo que chegou é o que eu auditei:
 
 ```
-378c8ae7f8044eeb845792d8c0a1e66799dec46c8c1058afe2a03cbb631d24c4  fortnite-external/fortnite_external_single.cpp
-bb4a7d5e40438413b5e139fcec1e718cc78d16a00a00a825390b206961004528  fortnite-external/fortnite_external.cpp
+9170b38f322208ee58f6a95204a4146c7099bde273a9c23a2a2ea6d2c8503cc6  fortnite-external/fortnite_external_single.cpp
+5f61e10d7444f5f686433accf5c531b4d8306e30824f00578b85f954b67ca3fc  fortnite-external/fortnite_external.cpp
 038dbc34c10776fc2705cfaf132db86c3f3c1c4d6b3346e64c3749cffb4e09bd  fortnite-external/build.bat
 f4bdfd666942d29763a54a61301dc2c490340ddefe9002c1329201bcc28de3db  fortnite-external/run.bat
 c44afbabc7fb89cfb989c243df17312c8f5d9bae7062101bb743caae018c6d59  tools/build_single.py
