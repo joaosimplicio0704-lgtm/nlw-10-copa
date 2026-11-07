@@ -79,6 +79,29 @@ Se não quiser usar o `.sln`, dá pra criar do zero (útil se for mexer muito no
 > é porque o projeto novo vem com `pch.h` ligado: em *Propriedades → C/C++ → Cabeçalhos Pré-compilados*,
 > mude de **Usar** para **Não Usar Cabeçalhos Pré-compilados**.
 
+### "Não é possível iniciar o programa ... bin\x64\Release\fortnite_external.exe"
+
+Isso é **erro de compilação, não do programa**: o `MSB8020` logo acima da caixa
+significa que o MSBuild não achou o compilador, então o `.exe` nunca foi gerado e o
+Visual Studio reclama que não existe. Três saídas, da mais rápida pra mais completa:
+
+1. **`build.bat`** — clique duas vezes. Ele acha o `vcvars64.bat`, compila e deixa o
+   `fortnite_external.exe` **na pasta do projeto** (não em `bin\x64\Release`). Depois
+   é só rodar `run.bat` (pede admin sozinho) ou o `.exe` como administrador.
+2. **Abrir o projeto com o toolset certo** — botão direito no projeto →
+   *Propriedades* → *Conjunto de Ferramentas da Plataforma*: escolha `Visual Studio 2022 (v143)`
+   e confirme em *Diretórios de VC++* que `Ferramentas de Build do MSVC para x64/x86`
+   aparece. O `.vcxproj` já vem com `<PlatformToolset>v143</PlatformToolset>` fixo,
+   justamente pra não herdar um toolset que você não tem instalado.
+3. **Instalar o compilador** — Visual Studio Installer → *Modificar* → marque
+   *Desenvolvimento para desktop com C++* com o *MSVC v143*.
+
+Depois de qualquer uma delas, confirme que o arquivo existe antes de rodar:
+
+```
+dir fortnite_external.exe
+```
+
 ### Erro `MSB8020` (não é possível encontrar as ferramentas v143)
 
 Três saídas, da mais rápida pra mais completa:
@@ -225,6 +248,30 @@ Guias rápidos dentro do menu:
 - **Misc** → mostra se o input está no modo *spoofed* e tem o botão de unload.
 
 ---
+
+## 3.1. "Abriu e fechou na hora"
+
+Ordem de investigação, porque quase sempre é uma das três coisas:
+
+1. **O `.exe` não foi compilado.** Se você deu F5 no Visual Studio e apareceu
+   `MSB8020` / "não é possível iniciar o programa", não é crash: não existe binário.
+   Veja a seção 1 (`build.bat`).
+2. **Abriu sem admin.** O `OpenProcess` é negado e o programa precisa reportar isso —
+   agora ele reporta e **segura a janela**: qualquer falha fatal imprime o motivo e
+   escreve `press ENTER to close this window`. Se a janela fechar sem essa mensagem,
+   veja o item 3.
+3. **Crash de verdade.** Aí rode pelo `run.bat`/console: o código de saída aparece no
+   final (`terminou com codigo ...`). Um `--help` também confirma que o binário
+   executa:
+
+```
+fortnite_external.exe --help
+```
+
+Se o console mostrar a etapa (`waiting for game`, `attaching`, ...) e a janela do
+painel não aparecer na tela, o problema é de overlay, não do processo: confira se o
+jogo está em *janela sem bordas* no monitor principal e se o Windows não está
+redirecionando o D3D9 (jogos em fullscreen exclusivo não deixam overlay por cima).
 
 ## 4. O que foi removido (e por quê)
 

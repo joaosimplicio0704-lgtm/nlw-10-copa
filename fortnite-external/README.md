@@ -18,7 +18,8 @@ written into the game process and nothing is injected.
 | **`fortnite_external_single.cpp`** | **generated** single translation unit — this is the one you compile |
 | `fortnite_external.cpp` | same program with `#include "offsets_gen.hpp"` (easier to diff) |
 | `offsets_gen.hpp` | generated offset table + layout asserts for this dump |
-| `build.bat` | MSVC build; finds `vcvars64.bat` itself |
+| `build.bat` | MSVC build; finds `vcvars64.bat` itself, leaves the `.exe` next to the sources |
+| `run.bat` | runs the `.exe` elevated and keeps the window open with the exit code |
 | `fortnite_external.sln` / `.vcxproj` | VS 2022 solution, x64, C++17, console |
 | `GUIA.md` | passo a passo em português |
 | `../tools/gen_offsets.py` | dump JSON → `offsets_gen.hpp` |
@@ -39,6 +40,30 @@ d3d9.lib dwmapi.lib user32.lib gdi32.lib psapi.lib winmm.lib
 `winmm` is for `timeBeginPeriod(1)` so the 4 ms `Sleep` floor is really 4 ms.
 
 ## Build
+
+Two paths, and the second one is the one that works when the IDE complains:
+
+```
+build.bat      # finds vcvars64, compiles, leaves fortnite_external.exe here
+run.bat        # asks for elevation, then runs it and keeps the window open
+```
+
+`MSB8020` ("não foi possível encontrar as Ferramentas de Build") is a **build**
+error, not a program error — the `.exe` was never produced, which is why Windows
+then reports that it cannot start the program. The project pins
+`<PlatformToolset>v143</PlatformToolset>` so it cannot silently inherit a toolset
+you do not have; install *Desktop development with C++* (MSVC v143) or use
+`build.bat`.
+
+#### It must not close silently
+
+A console program that fails at startup closes its own window, which looks like
+"abriu e fechou". Every fatal path now ends in `fatal()`: the reason is printed,
+then `press ENTER to close this window`. A lost D3D9Ex device is retried for ~2 s
+before that happens, and a device failure no longer breaks the loop silently.
+If the window still vanishes, it is a crash rather than exit — run it from
+`run.bat`, which prints the exit code.
+
 
 MSVC x64 Developer prompt (or `build.bat`):
 

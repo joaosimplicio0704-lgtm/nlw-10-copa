@@ -45,6 +45,7 @@
 #include <cfloat>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>     // system("pause") in fatal()
 #include <vector>
 
 #pragma comment(lib, "d3d9.lib")
@@ -162,6 +163,32 @@ namespace settings
         inline bool distance   = false;
         inline bool health_bar = false;
     }
+}
+
+// A console program that dies at startup closes its own console window, which
+// looks exactly like "abre e fecha". Every fatal path below stops here instead:
+// the reason is printed, the exit code is set, and the window waits for a key.
+[[noreturn]] inline void fatal(const char* why)
+{
+    printf("\n[!] %s\n", why ? why : "fatal error");
+    printf("[!] press ENTER to close this window\n");
+    fflush(stdout);
+
+    // keep reading until a real newline: the console may be non-interactive,
+    // and GetAsyncKeyState/ReadConsole can return immediately with nothing.
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    if (in && in != INVALID_HANDLE_VALUE && GetFileType(in) == FILE_TYPE_CHAR)
+    {
+        char buf[8];
+        DWORD got = 0;
+        ReadConsoleA(in, buf, sizeof(buf), &got, nullptr);
+    }
+    else
+    {
+        system("pause");
+    }
+
+    ExitProcess(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -2721,78 +2748,82 @@ inline void render_menu()
 // ---------------------------------------------------------------------------
 //  device loss / resize — one place, checked every frame
 // ---------------------------------------------------------------------------
+// These touch overlay::device / overlay::params, so they have to be qualified:
+// they used to live in a `namespace overlay { ... }` block opened *inside* a
+// function, which MSVC rejects ("inline" in block scope, C4596).
 namespace overlay
 {
-    inline bool font_ok = false;
+inline bool font_ok = false;
 
-    inline void release_font()
+inline void release_font()
+{
+    if (draw::font.tex) { draw::font.tex->Release(); draw::font.tex = nullptr; }
+    font_ok = false;
+}
+
+inline bool recreate_font()
+{
+    font_ok = draw::create_font(overlay::device, draw::font, cfg::kFontPx, "Consolas");
+    return font_ok;
+}
+
+inline bool reset_device()
+{
+    if (!overlay::device) return false;
+
+    release_font();
+
+    const HRESULT hr = overlay::device->Reset(&overlay::params);
+    if (FAILED(hr))
     {
-        if (draw::font.tex) { draw::font.tex->Release(); draw::font.tex = nullptr; }
-        font_ok = false;
+        printf("[!] device Reset failed (0x%08lX)\n", static_cast<unsigned long>(hr));
+        overlay::destroy_device();
+        if (!overlay::init_device()) return false;
     }
 
-    inline bool recreate_font()
+    if (!recreate_font()) return false;
+    return true;
+}
+
+// Returns false when the overlay can no longer render.
+inline bool ensure_device()
+{
+    if (!overlay::device)
     {
-        font_ok = draw::create_font(device, draw::font, cfg::kFontPx, "Consolas");
-        return font_ok;
+        if (!overlay::init_device()) return false;
+        return recreate_font();
     }
 
-    inline bool reset_device()
+    const HRESULT coop = overlay::device->TestCooperativeLevel();
+    if (coop == D3DERR_DEVICELOST) return true;          // wait for the next frame
+    if (coop == D3DERR_DEVICENOTRESET)
+        return reset_device();
+
+    if (FAILED(coop))
     {
-        if (!device) return false;
-
-        release_font();
-
-        const HRESULT hr = device->Reset(&params);
-        if (FAILED(hr))
-        {
-            printf("[!] device Reset failed (0x%08lX)\n", static_cast<unsigned long>(hr));
-            destroy_device();
-            if (!init_device()) return false;
-        }
-
-        if (!recreate_font()) return false;
-        return true;
+        printf("[!] TestCooperativeLevel failed (0x%08lX)\n", static_cast<unsigned long>(coop));
+        overlay::destroy_device();
+        return overlay::init_device() && recreate_font();
     }
 
-    // Returns false when the overlay can no longer render.
-    inline bool ensure_device()
+    return true;
+}
+
+inline void resize(int w, int h)
+{
+    if (!overlay::hwnd || w <= 0 || h <= 0) return;
+
+    SetWindowPos(overlay::hwnd, HWND_TOPMOST, 0, 0, w, h, SWP_NOACTIVATE);
+    overlay::params.BackBufferWidth  = static_cast<UINT>(w);
+    overlay::params.BackBufferHeight = static_cast<UINT>(h);
+
+    if (overlay::device)
     {
-        if (!device)
-        {
-            if (!init_device()) return false;
-            return recreate_font();
-        }
-
-        const HRESULT coop = device->TestCooperativeLevel();
-        if (coop == D3DERR_DEVICELOST) return true;          // wait for the next frame
-        if (coop == D3DERR_DEVICENOTRESET)
-            return reset_device();
-
-        if (FAILED(coop))
-        {
-            printf("[!] TestCooperativeLevel failed (0x%08lX)\n", static_cast<unsigned long>(coop));
-            destroy_device();
-            return init_device() && recreate_font();
-        }
-
-        return true;
+        if (!reset_device())
+            printf("[!] overlay lost after resize\n");
     }
 
-    inline void resize(int w, int h)
-    {
-        if (!hwnd || w <= 0 || h <= 0) return;
-
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, w, h, SWP_NOACTIVATE);
-        params.BackBufferWidth  = static_cast<UINT>(w);
-        params.BackBufferHeight = static_cast<UINT>(h);
-
-        if (device)
-        {
-            if (!reset_device())
-                printf("[!] overlay lost after resize\n");
-        }
-    }
+}
 }
 
 inline bool params_dirty(UINT cur_w, int new_w, UINT cur_h, int new_h)
@@ -2806,6 +2837,7 @@ inline bool params_dirty(UINT cur_w, int new_w, UINT cur_h, int new_h)
 inline void main_loop(uintptr_t uworld_override)
 {
     bool override_tried = false;
+    int  device_failures = 0;
 
     LARGE_INTEGER freq{}, last{};
     QueryPerformanceFrequency(&freq);
@@ -2848,12 +2880,24 @@ inline void main_loop(uintptr_t uworld_override)
                          overlay::params.BackBufferHeight, settings::height))
             overlay::resize(settings::width, settings::height);
 
+        // A lost device is normal (alt-tab, resolution change, driver reset); it
+        // is only fatal if it stays unavailable. Never break the loop silently:
+        // that looks like the program "fechou sozinho".
         if (!overlay::ensure_device())
         {
-            printf("[!] overlay device unavailable, stopping\n");
-            overlay::running = false;
-            break;
+            if (++device_failures > 120)      // ~2 s of failures at a 4-16 ms tick
+            {
+                overlay::release_font();
+                overlay::destroy_device();
+                overlay::destroy_window();
+                mem.detach();
+                timeEndPeriod(1);
+                fatal("overlay device could not be recovered (D3D9Ex lost)");
+            }
+            Sleep(cfg::kTickMs);
+            continue;
         }
+        device_failures = 0;
 
         // one bootstrap step per frame: attach / resolve UWorld / probe layout.
         // Never blocks, so the overlay keeps drawing the current stage instead of
@@ -2955,6 +2999,23 @@ int main(int argc, char** argv)
     SetProcessDPIAware();
     SetConsoleCtrlHandler(console_ctrl, TRUE);
     SetConsoleTitleA("fortnite external (user mode)");
+
+    // Launched from Explorer / Visual Studio with F5, the working directory is
+    // not the project folder, so "fortnite_external.cfg.json" lands somewhere
+    // unexpected (or nowhere writable). Anchor it next to the .exe instead.
+    {
+        char exe_path[MAX_PATH]{};
+        if (GetModuleFileNameA(nullptr, exe_path, MAX_PATH))
+        {
+            char* last = strrchr(exe_path, '\\');
+            if (last)
+            {
+                *last = '\0';
+                SetCurrentDirectoryA(exe_path);
+            }
+        }
+    }
+
     timeBeginPeriod(1);
 
     // line-buffered so the status lines reach the console while the game loads
@@ -2982,8 +3043,9 @@ int main(int argc, char** argv)
     if (!overlay::create_window())
     {
         status::fail("overlay window creation failed");
+        overlay::destroy_window();
         timeEndPeriod(1);
-        return 1;
+        fatal("overlay window creation failed (see the line above)");
     }
 
     if (!overlay::init_device())
@@ -2991,7 +3053,7 @@ int main(int argc, char** argv)
         status::fail("D3D9Ex device creation failed");
         overlay::destroy_window();
         timeEndPeriod(1);
-        return 1;
+        fatal("D3D9Ex device creation failed - no GPU / no D3D9? try a windowed game");
     }
 
     if (!overlay::recreate_font())
@@ -3000,7 +3062,7 @@ int main(int argc, char** argv)
         overlay::destroy_device();
         overlay::destroy_window();
         timeEndPeriod(1);
-        return 1;
+        fatal("font atlas creation failed (Consolas missing?)");
     }
 
     // console hints that only make sense once, before the loop takes over
