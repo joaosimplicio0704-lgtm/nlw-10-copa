@@ -79,13 +79,26 @@ namespace cfg
     constexpr float kNearPlane     = 1.0;            // world units; behind this = discard
 
     // --- visibility -------------------------------------------------------
-    // bRecentlyRendered (SkinnedMeshComponent 0x7E1) is a bitfield byte, and the
-    // dump gives the byte but NOT the bit. 0x01 below is a guess, so the feature
-    // is off by default and the bit is marked FILL.
-    // FILL: read that byte on a pawn you can see and one behind cover; the bit
-    //       that flips is the real one. Until then leave this false.
+    // bRecentlyRendered is bit 1 of the byte at SkinnedMeshComponent+0x7E1 — the
+    // dump's listing says "bRecentlyRendered = 0x7e1; // bool : 1" (bit 0 of that
+    // byte is bCanHighlightSelectedSections). 0x01 was wrong: it tested the
+    // neighbouring flag, so the old value would have reported the wrong players as
+    // visible. Verified from the dump, no longer a guess.
+    //
+    // It still means "was rendered recently", not "visible to me": a teammate or a
+    // pawn rendered through a scope also passes. Kept off by default for that
+    // reason, not because the bit is unknown.
     constexpr bool    kVisibleOnly         = false;
-    constexpr uint8_t kRecentlyRenderedBit = 0x01;   // FILL: unverified
+    constexpr uint8_t kRecentlyRenderedBit = 0x02;   // bit 1 of 0x7E1 (dump)
+
+    // --- downed players ---------------------------------------------------
+    // FortPawn::bIsDBNO is bit 7 of 0x892 ("bIsDBNO = 0x892; // bool : 7").
+    // Off by default: the offset is only valid if the pawn really is a FortPawn,
+    // and a bit that reads garbage elsewhere would silently drop valid targets.
+    // Turn it on if you want the aimbot to ignore downed players.
+    constexpr bool    kSkipDowned          = false;
+    constexpr uint8_t kDownedBit           = 0x80;   // bit 7 of 0x892 (dump)
+    constexpr uint8_t kSpectatorBit        = 0x02;   // bit 1 of PlayerState+0x282 (dump)
 
     // --- bones ------------------------------------------------------------
     // Bone aiming needs the bone array: pointer, element stride and whether it
@@ -101,12 +114,20 @@ namespace cfg
     constexpr bool  kBoneTransformsAreFloat = false; // FILL: FTransform3f vs FTransform
 
     // --- UWorld -----------------------------------------------------------
-    // The dump has no globals section, so GWorld is unknown. Resolution order:
-    //   1. argv --uworld 0x...          (validated, never trusted blindly)
-    //   2. off::UWorld if the dump ever ships it
+    // off::UWorld comes from the dump (Class.UWORLD) and is a *static offset into
+    // the module*, valid for the build it was dumped from. Resolution order:
+    //   1. argv --uworld 0x...          (validated strictly, never trusted blindly)
+    //   2. off::UWorld                  (same validation; wrong after a patch)
     //   3. bounded scan of the module's writable sections, chunked over several
     //      ticks and rate-limited — never a full-range sweep inside one tick
-    constexpr uintptr_t kUWorldOverride    = 0x0;    // code default; --uworld wins
+    // "Validated" means static_world_is_live(): the pointer chain must resolve to a
+    // camera or to the local pawn sitting in GameState.PlayerArray. A readable but
+    // wrong object is rejected, so a stale offset degrades to the scan instead of
+    // driving the ESP off garbage.
+    // Empty by default: off::UWorld (from the dump) is the code default now, and
+    // --uworld on the command line overrides both. A value here is for builds
+    // where the dump is older than the game.
+    constexpr uintptr_t kUWorldOverride    = 0x0;
     constexpr bool      kAutoResolveUWorld = true;
     constexpr uintptr_t kScanChunkBytes    = 0x20000;   // 128 KiB per read
     constexpr int       kScanChunksPerStep = 8;         // 1 MiB per step, then yield
@@ -872,15 +893,14 @@ inline bool bone_world_location(uintptr_t mesh, int bone_id, Vector3& out)
 // ---------------------------------------------------------------------------
 //  camera + projection
 // ---------------------------------------------------------------------------
-inline Camera get_view_point()
+// Decode the POV out of a PlayerCameraManager. Split out of get_view_point() so
+// the static-offset validation can ask "does a camera resolve through this world?"
+// without depending on the per-tick cache.
+inline bool read_camera_pov(uintptr_t camera_manager, Camera& out)
 {
     Camera view{};
 
-    if (!mem.alive() || !Mem::plausible_ptr(cache::player_controller)) return view;
-
-    uintptr_t camera_manager = 0;
-    if (!mem.read(cache::player_controller + off::PlayerCameraManager, camera_manager)) return view;
-    if (!Mem::plausible_ptr(camera_manager)) return view;
+    if (!mem.alive() || !Mem::plausible_ptr(camera_manager)) return false;
 
     // FCameraCacheEntry { double Timestamp @0x00; FMinimalViewInfo POV @0x10; }
     const uintptr_t pov = camera_manager + off::CameraCachePrivate + off::CameraPOV;
@@ -902,19 +922,19 @@ inline Camera get_view_point()
                           plausible_translation(loc64.x, loc64.y, loc64.z, 5000000.0) &&
                           std::fabs(rot64.x) <= 90.5 && std::fabs(rot64.z) <= 360.5;
 
-        if (ok32 && !ok64)      { location = loc32; rotation = rot32; }
+            if (ok32 && !ok64)      { location = loc32; rotation = rot32; }
         else if (ok64 && !ok32) { location = loc64; rotation = rot64; }
-        else return view;       // neither layout describes this POV: refuse to guess
+        else return false;      // neither layout describes this POV: refuse to guess
     }
 
     float fov = 0.f;      // float, not double: FOV 0x30 / DesiredFOV 0x34 in the dump
-    if (!mem.read(pov + off::CameraFOV, fov)) return view;
+    if (!mem.read(pov + off::CameraFOV, fov)) return false;
 
-    if (!valid_vector(location)) return view;
-    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y) || !std::isfinite(rotation.z)) return view;
+    if (!valid_vector(location)) return false;
+    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y) || !std::isfinite(rotation.z)) return false;
 
     // FOV is horizontal degrees; outside this it is a read from the wrong offset
-    if (!std::isfinite(fov) || fov <= 1.f || fov >= 180.f) return view;
+    if (!std::isfinite(fov) || fov <= 1.f || fov >= 180.f) return false;
 
     view.location = location;
     view.rotation.pitch = rotation.x;   // rotation is stored as (pitch, yaw, roll)
@@ -922,6 +942,22 @@ inline Camera get_view_point()
     view.rotation.roll  = rotation.z;
     view.fov = static_cast<double>(fov);
     view.valid = valid_rotator(view.rotation);
+    if (!view.valid) return false;
+
+    out = view;
+    return true;
+}
+
+inline Camera get_view_point()
+{
+    Camera view{};
+
+    if (!mem.alive() || !Mem::plausible_ptr(cache::player_controller)) return view;
+
+    uintptr_t camera_manager = 0;
+    if (!mem.read(cache::player_controller + off::PlayerCameraManager, camera_manager)) return view;
+
+    read_camera_pov(camera_manager, view);
     return view;
 }
 
@@ -1161,25 +1197,41 @@ namespace scanner
     }
 }
 
+// Defined further down, next to the local-player walk they depend on.
+inline bool static_world_is_live(uintptr_t world);
+
+// The scan is a resumable state machine: it must be *stepped* often, and stepping
+// it is cheap (it self-limits to one chunk per cfg::kScanRetryMs). The static
+// reads are cheap too, so all three sources are tried on every call, in order:
+//
+//   1. off::UWorld      static from the dump, validated strictly (per-build, so it
+//                       can be wrong after a patch — static_world_is_live() is what
+//                       makes that safe: it needs a camera or the local pawn inside
+//                       GameState.PlayerArray, not just a readable pointer chain)
+//   2. --uworld         same, but from the command line
+//   3. bounded scan     resumable; progress is visible in the status panel
+//
+// Returns 0 while a world is not resolvable *yet* (lobby, scanning). Callers poll.
 inline uintptr_t resolve_uworld()
 {
     if (!mem.alive()) return 0;
 
-    // 1 + 2: a validated offset, if we have one
-    if (off::UWorld)
+    // Offsets are relative to the module base, so both forms are equivalent:
+    //   mem.read(mem.base + off::UWorld)   reads base+0x1C8E1578   (correct)
+    //   mem.read(off::UWorld)              would read the raw address (wrong)
+    // Kept explicit so a future "shortcut" cannot turn the static into a raw
+    // pointer read.
+    const uintptr_t static_offset = off::UWorld ? off::UWorld : cfg::kUWorldOverride;
+
+    if (static_offset)
     {
         uintptr_t world = 0;
-        if (mem.read(mem.base + off::UWorld, world) && looks_like_uworld(world))
-            return world;
-    }
-    if (cfg::kUWorldOverride)
-    {
-        uintptr_t world = 0;
-        if (mem.read(mem.base + cfg::kUWorldOverride, world) && looks_like_uworld(world))
+        if (mem.read(mem.base + static_offset, world) && static_world_is_live(world))
             return world;
     }
 
-    // 3: bounded scan
+    // Always advance the scan, even when a static was just refused: that refusal
+    // is exactly the case where the scan is the fallback.
     if (cfg::kAutoResolveUWorld)
         return scanner::step(mem.base);
 
@@ -2105,31 +2157,98 @@ constexpr uintptr_t kLocalPlayerController = 0x30;
 // world -> GameInstance -> LocalPlayers[0] -> PlayerController -> Pawn.
 // Read-only, bounded (one TArray element, not the whole array), and every hop is
 // validated. Returns 0 at the first hop that does not make sense.
-inline uintptr_t local_pawn_from_world()
+// One walk, two outputs: the controller is what the camera hangs off, the pawn is
+// what the layout probe and the world position need. Both are optional; a null
+// `out_pc` or `out_pawn` is simply not written.
+inline bool local_player_walk(uintptr_t world, uintptr_t* out_pc, uintptr_t* out_pawn)
 {
-    if (!mem.alive() || !looks_like_uworld(cache::uworld)) return 0;
+    if (out_pc) *out_pc = 0;
+    if (out_pawn) *out_pawn = 0;
+
+    if (!mem.alive() || !looks_like_uworld(world)) return false;
 
     uintptr_t gi = 0;
-    if (!mem.read(cache::uworld + off::GameInstance, gi) || !Mem::plausible_ptr(gi)) return 0;
+    if (!mem.read(world + off::GameInstance, gi) || !Mem::plausible_ptr(gi)) return false;
 
     uintptr_t players = 0;      // TArray<ULocalPlayer*>
-    if (!mem.read(gi + off::LocalPlayers, players) || !Mem::plausible_ptr(players)) return 0;
+    if (!mem.read(gi + off::LocalPlayers, players) || !Mem::plausible_ptr(players)) return false;
 
     int num = 0, max = 0;
-    if (!mem.read(players + 0x08, num) || !mem.read(players + 0x0C, max)) return 0;
-    if (num < 1 || num > static_cast<int>(cfg::kMaxPlayers) || max < num) return 0;
+    if (!mem.read(players + 0x08, num) || !mem.read(players + 0x0C, max)) return false;
+    if (num < 1 || num > static_cast<int>(cfg::kMaxPlayers) || max < num) return false;
 
     uintptr_t local_player = 0;
-    if (!mem.read(players, local_player) || !Mem::plausible_ptr(local_player)) return 0;
+    if (!mem.read(players, local_player) || !Mem::plausible_ptr(local_player)) return false;
 
     uintptr_t pc = 0;
-    if (!mem.read(local_player + kLocalPlayerController, pc) || !Mem::plausible_ptr(pc)) return 0;
+    if (!mem.read(local_player + kLocalPlayerController, pc) || !Mem::plausible_ptr(pc)) return false;
+    if (out_pc) *out_pc = pc;
 
     uintptr_t pawn = 0;
-    if (!mem.read(pc + off::LocalPawn, pawn) || !Mem::plausible_ptr(pawn)) return 0;
+    if (!mem.read(pc + off::LocalPawn, pawn) || !Mem::plausible_ptr(pawn)) return true;  // controller is real, pawn may not exist yet
+    if (out_pawn) *out_pawn = pawn;
 
+    return true;
+}
+
+inline uintptr_t local_pawn_from_world()
+{
+    uintptr_t pawn = 0;
+    local_player_walk(cache::uworld, nullptr, &pawn);
     return pawn;
 }
+
+// The camera path, used only as evidence: GameInstance -> LocalPlayers[0] ->
+// PlayerController -> PlayerCameraManager -> CameraCache -> POV. Returns true when
+// a readable, plausible camera exists for THIS world pointer.
+inline bool world_has_camera(uintptr_t world)
+{
+    uintptr_t pc = 0;
+    if (!local_player_walk(world, &pc, nullptr) || !pc) return false;
+
+    uintptr_t mgr = 0;
+    if (!mem.read(pc + off::PlayerCameraManager, mgr) || !Mem::plausible_ptr(mgr)) return false;
+
+    Camera probe;
+    return read_camera_pov(mgr, probe);
+}
+
+// Strict check for a *static* offset (off::UWorld / --uworld). The dump states
+// the offset for one specific build; the cheap check above cannot tell a stale
+// offset from a lobby, so here we require positive evidence that the object we
+// landed on is this process's live world: the pawn the local player points at
+// must also be in GameState.PlayerArray, or a camera must resolve through it.
+inline bool static_world_is_live(uintptr_t world)
+{
+    if (!looks_like_uworld(world)) return false;
+
+    // (a) camera resolves -> the whole controller chain exists
+    if (world_has_camera(world)) return true;
+
+    // (b) local pawn is present in the world's player array
+    uintptr_t pawn = 0;
+    if (!local_player_walk(world, nullptr, &pawn) || !pawn) return false;
+
+    uintptr_t gs = 0, data = 0;
+    int32_t num = 0;
+    if (!mem.read(world + off::GameState, gs) || !Mem::plausible_ptr(gs)) return false;
+    if (!mem.read(gs + off::PlayerArray, data) || !Mem::plausible_ptr(data)) return false;
+    if (!mem.read(gs + off::PlayerArray + 0x08, num)) return false;
+    if (num <= 0 || num > static_cast<int>(cfg::kMaxPlayers)) return false;
+
+    for (int i = 0; i < num && i < 64; ++i)                 // bounded, never the whole array
+    {
+        uintptr_t state = 0;
+        if (!mem.read(data + static_cast<uintptr_t>(i) * sizeof(uintptr_t), state)) continue;
+        if (!Mem::plausible_ptr(state)) continue;
+
+        uintptr_t candidate = 0;
+        if (mem.read(state + off::PawnPrivate, candidate) && candidate == pawn) return true;
+    }
+
+    return false;
+}
+
 
 inline void bootstrap_tick(uintptr_t uworld_override, bool& tried_override)
 {
@@ -2197,7 +2316,7 @@ inline void bootstrap_tick(uintptr_t uworld_override, bool& tried_override)
             tried_override = true;
 
             uintptr_t world = 0;
-            if (mem.read(mem.base + uworld_override, world) && looks_like_uworld(world))
+            if (mem.read(mem.base + uworld_override, world) && static_world_is_live(world))
             {
                 cache::uworld = world;
                 cache::uworld_ready = true;
@@ -2206,7 +2325,7 @@ inline void bootstrap_tick(uintptr_t uworld_override, bool& tried_override)
             }
             else
             {
-                printf("[!] --uworld 0x%llX rejected by validation (wrong for this build?)\n",
+                printf("[!] --uworld 0x%llX rejected (stale, or no pawn/camera yet)\n",
                        static_cast<unsigned long long>(uworld_override));
             }
         }
@@ -2219,10 +2338,24 @@ inline void bootstrap_tick(uintptr_t uworld_override, bool& tried_override)
 
         if (!cache::uworld_ready)
         {
-            // show the scan's own progress while it is the thing running
-            status::set(scanner::prepared && !scanner::exhausted ? status::Stage::Scanning
-                                                                : status::Stage::WaitingForWorld,
-                        scanner::exhausted ? "scan finished, use --uworld (see README)" : nullptr);
+            // Two different situations produce "no world", and they need different
+            // advice: a static offset that points at something readable but not at
+            // this process's world (stale offset / menu / loading) versus a scan
+            // that has not found anything yet.
+            uintptr_t probe = 0;
+            const uintptr_t static_offset = off::UWorld ? off::UWorld : cfg::kUWorldOverride;
+
+            if (static_offset && mem.read(mem.base + static_offset, probe) && Mem::plausible_ptr(probe))
+            {
+                status::set(status::Stage::Scanning,
+                            "offset readable but not validated: menu/lobby, or stale for this patch");
+            }
+            else
+            {
+                status::set(scanner::prepared && !scanner::exhausted ? status::Stage::Scanning
+                                                                    : status::Stage::WaitingForWorld,
+                            scanner::exhausted ? "scan finished, no UWorld (see README)" : nullptr);
+            }
             return;
         }
 
@@ -2476,6 +2609,22 @@ inline void game_tick()
         if (!mem.read(player_state + off::PawnPrivate, pawn)) continue;
         if (!Mem::plausible_ptr(pawn)) continue;
         if (pawn == cache::local_pawn) continue;
+
+        // Spectators have no pawn of their own; a pawn behind a spectator state is
+        // stale data from a previous life.
+        {
+            uint8_t spec = 0;
+            if (mem.read(player_state + off::IsSpectator, spec) && (spec & cfg::kSpectatorBit)) continue;
+        }
+
+        // Optional (cfg::kSkipDowned): bIsDBNO is bit 7 of FortPawn+0x892. Only read
+        // when the user asks for it, because the offset is meaningless on a pawn
+        // that is not a FortPawn.
+        if (cfg::kSkipDowned)
+        {
+            uint8_t dbno = 0;
+            if (mem.read(pawn + off::IsDBNO, dbno) && (dbno & cfg::kDownedBit)) continue;
+        }
 
         uintptr_t root = 0;
         if (!mem.read(pawn + off::RootComponent, root)) continue;

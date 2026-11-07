@@ -1,22 +1,17 @@
 {
   "item": {
-    "source": "OffsetDeck",
+    "source": "user upload",
     "game": "fortnite",
-    "title": "Fortnite",
-    "platform": "Windows",
-    "url": "https://alloffsets.lovable.app/api/public/v1/games/fortnite",
-    "page": "https://alloffsets.lovable.app/api/public/v1/games/fortnite",
-    "hint": {}
+    "platform": "Windows"
   },
   "version": "43.00",
-  "revision": "1",
-  "dated": "2026-11-06T03:28:21.320Z",
-  "links": {
-    "Dump completo": "https://alloffsets.lovable.app/api/public/v1/games/fortnite",
-    "Fonte": "https://alloffsets.lovable.app/"
-  },
+  "dated": "2026-11-07",
   "count": 5886,
-  "notice": "Compatibilidade com o jogo não testada.",
-  "digest": "69b017e89e93b105ac40afb7c51a02012531db8d8fa8ad14106ea2a2082f2595",
-  "aviso": "Dados públicos da fonte indicada; compatibilidade não testada. Preserve os créditos e a licença do projeto."
+  "structs": 240,
+  "files": {
+    "fortnite_offsets_43.00.json": "flat shape: <Struct>.<Field> -> hex (this is what gen_offsets reads)",
+    "fortnite_offsets_43.00.full.json": "original: offsets + offsets_flat + markdown listing (verified identical field values)"
+  },
+  "crosscheck": "all 28 offsets read by fortnite_external.cpp are byte-identical between the flat dump and the previous OffsetDeck dump; the new information is Class.UWORLD = 0x1C8E1578",
+  "notice": "compatibilidade com o jogo nao testada"
 }

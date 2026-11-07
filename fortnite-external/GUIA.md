@@ -211,8 +211,24 @@ nos dois formatos em cima do pawn local e usa o que der um transform coerente.
 se aparecer `UNRESOLVED`, você está no lobby — entra na partida que ele resolve
 sozinho em ~1 s.
 
-Se você já tem o offset do GWorld pra esse patch, passe na linha de comando — ele é
-validado antes de ser aceito:
+**Novo:** o dump agora traz o GWorld direto (`Class.UWORLD = 0x1C8E1578`), então ele
+já vem preenchido no `offsets_gen.hpp` — não precisa mais passar `--uworld` nem
+esperar a varredura. O offset é validado do jeito forte antes de ser usado: o
+programa confere que a cadeia chega numa câmera ou que o seu pawn está dentro do
+`GameState.PlayerArray`. Se não passar (menu, lobby de transição, ou patch novo com
+offset velho), ele **rejeita** e cai na varredura sozinho — ou seja, offset errado
+vira "mais lento", nunca "ESP desenhado em cima da coisa errada".
+
+No painel/console você vê qual dos dois casos é:
+
+| mensagem | significa |
+|---|---|
+| `offset readable but not validated` | o offset aponta para algo legível mas que não é o mundo desta partida (menu/lobby/patch diferente) |
+| `scanning for uworld` | a varredura limitada está procurando sozinha |
+| `uworld 0x...` + `ready` | validado, mira e ESP liberados |
+
+Se você tem o offset do GWorld de outro lugar, pode passar na linha de comando — ele
+passa pela mesma validação:
 
 ```
 fortnite_external.exe --diag              (testa overlay/device/fonte e sai)

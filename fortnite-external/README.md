@@ -27,7 +27,8 @@ written into the game process and nothing is injected.
 | `../tools/syntax_check.py` | **real** compile + link for x86_64-windows (zig or mingw-w64); exits 3 = not compiled |
 | `../tools/check_math.py` | projection/basis invariants — orthonormality, forward→centre, behind rejected |
 | `../tools/check_all.sh` | regenerate + rebuild + gate |
-| `../tools/fortnite_offsets_43.00.json` | the dump (240 structs, 5886 fields) |
+| `../tools/fortnite_offsets_43.00.json` | the dump used to generate the header (flat `<Struct>.<Field>` shape, 240 structs, 5886 fields) |
+| `../tools/fortnite_offsets_43.00.full.json` | the same dump in the original shape (with `offsets_flat` + the human-readable listing). Field values cross-checked identical |
 
 ## Dependencies
 
@@ -217,6 +218,50 @@ Still `// FILL:` — the cheat does not guess any of these:
 | `ULocalPlayer::PlayerController` | `0x30`, validated by the walk failing safely | not a reflected property. Confirm by printing `ULocalPlayer+0x00..0x80` |
 
 ## UWorld resolution
+
+The dump now carries the GWorld static: `Class.UWORLD = 0x1C8E1578`. It is a
+**static offset into the module**, valid for the build it was dumped from, so it
+is never trusted on its own:
+
+```
+base + 0x1C8E1578                     (module-relative: the only correct form)
+  -> looks_like_uworld()              readable GameInstance/LocalPlayers/GameState chain
+  -> static_world_is_live()           AND (a camera resolves through it,
+                                          OR the local pawn is in GameState.PlayerArray)
+```
+
+If the strict check fails — menu, lobby transition, or an offset from another
+patch — the static is rejected and the bounded scan takes over, so a stale offset
+degrades to "slower" instead of "ESP drawn off a wrong object". The status panel
+says which case you are in: `offset readable but not validated` vs `scanning`.
+
+`--uworld 0x...` goes through the same strict check, and `cfg::kUWorldOverride`
+stays available for a build whose dump is older than the game.
+
+## Offsets in this build
+
+Cross-checked against the previous dump: **all 28 offsets the program reads are
+identical**; the new information is the UWorld static plus the bit positions of
+three flags that were previously guessed or skipped:
+
+| field | offset | bit | source |
+|---|---|---|---|
+| `Class.UWORLD` | `0x1C8E1578` | — | dump (`Class.UWORLD`) |
+| `bRecentlyRendered` | `0x7E1` | **1** (`0x02`) | dump listing: `// bool : 1` |
+| `bIsDBNO` | `0x892` | **7** (`0x80`) | dump listing: `// bool : 7` |
+| `bIsSpectator` | `0x282` | **1** (`0x02`) | dump listing: `// bool : 1` |
+
+`bRecentlyRendered` used to test `0x01`, which is the *neighbouring* flag
+(`bCanHighlightSelectedSections`) — that was a real bug: the wrong players were
+reported as visible. It is now the documented bit, and still off by default
+because "recently rendered" is not "visible to me".
+
+`bIsDBNO` and `bIsSpectator` are now wired as target filters (`cfg::kSkipDowned`,
+spectators always skipped); both default to the safe side.
+
+Still `// FILL:`: the bone array (stride/space/index are not in this dump) —
+`off::BoneArray`, so `cfg::kBoneWorldLocations` stays `false` and the aim point is
+the capsule.
 
 1. `--uworld 0x...` → validated by `looks_like_uworld()` before use.
 2. `off::UWorld` from the generated header, when a dump ships it.

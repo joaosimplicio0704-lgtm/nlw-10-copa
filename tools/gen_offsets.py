@@ -21,6 +21,7 @@ of silently producing garbage world-to-screen math.
 """
 
 import json
+import re
 import sys
 
 # ---------------------------------------------------------------------------
@@ -49,6 +50,7 @@ WANT = {
 
     # --- skeletal mesh -----------------------------------------------------
     "RecentlyRendered":        ("SkinnedMeshComponent", "bRecentlyRendered"),
+    "IsSpectator":             ("PlayerState", "bIsSpectator"),
 
     # --- player state ------------------------------------------------------
     "PawnPrivate":         ("PlayerState", "PawnPrivate"),
@@ -60,9 +62,11 @@ WANT = {
     "HealthSet":           ("FortPawn", "HealthSet"),
     "Health":              ("FortHealthSet", "Health"),
     "MaxHealth":           ("FortHealthSet", "MaxHealth"),
-    # bIsDBNO (FortPawn 0x892) is in the dump but its bit index is not, so it
-    # is not read: a wrong bit would mark live players as downed.
     "CapsuleHalfHeight":   ("FortPawn", "CapsuleHalfHeightFortPawn"),
+    # bIsDBNO lives at FortPawn+0x892, bit 7 (the dump's markdown lists
+    # "bIsDBNO = 0x892 // bool : 7"). Read only when cfg::kSkipDowned is on, because
+    # a non-FortPawn pawn would put arbitrary data at that offset.
+    "IsDBNO":              ("FortPawn", "bIsDBNO"),
 
     # --- camera ------------------------------------------------------------
     "PlayerCameraManager": ("PlayerController", "PlayerCameraManager"),
@@ -76,8 +80,8 @@ WANT = {
 # Not in the dump at all. Emitted as 0 with the recipe to obtain them.
 FILL = {
     "UWorld": [
-        "not present: the dump has no globals section, so the GWorld static",
-        "is unknown for this build. Get it for your patch:",
+        "absent from this dump: no globals section and no Class.UWORLD field,",
+        "so the GWorld static is unknown for this build. Get it for your patch:",
         "  1. run this tool with --scan (bounded, resumable) and copy the",
         "     base+0x... it prints, or",
         "  2. AOB scan the module for the load of the UWorld static, e.g.",
@@ -87,9 +91,8 @@ FILL = {
         "  3. Cheat Engine: find a qword whose pointee has valid pointers at",
         "     +0x1D0 (GameState) and +0x248 (OwningGameInstance).",
         "  Whatever you get must pass looks_like_uworld(); the tool validates it",
-        "  and refuses the value otherwise. Values floating around on forums",
-        "  (e.g. 0x1C8E1578) are unverified for v43.00 — pass them on the",
-        "  command line (--uworld 0x...) and watch the console verdict.",
+        "  and refuses the value otherwise, and a static offset from another",
+        "  patch is harmless because of that check (it is just rejected).",
     ],
     "BoneArray": [
         "not present, and CachedBoneSpaceTransforms is not a substitute:",
@@ -113,6 +116,112 @@ FILL = {
 }
 
 
+# ---------------------------------------------------------------------------
+#  two dump shapes are accepted
+#
+#    a) OffsetDeck / "structs":  offsets.structs.<Struct>.<Field> = "0x.."
+#    b) alloffsets / "flat":     offsets.<Struct>.<Field>        = "0x.."
+#
+#  b) is what the site hands out after "atualizar"; a) is what the repo has
+#  committed. Normalising here means neither shape can silently produce a
+#  header full of zeros.
+# ---------------------------------------------------------------------------
+
+NAMESPACE_RE = re.compile(r"^\s*namespace\s+(?P<struct>[A-Za-z_]\w*)\s*\{", re.M)
+MEMBER_RE = re.compile(
+    r"inline\s+[\w:<>, ]*?\b(?P<field>[A-Za-z_]\w*)\s*=\s*(?P<value>0x[0-9a-fA-F]+)"
+)
+
+
+def from_markdown_members(markdown):
+    """Struct/field/offset triples out of the dump's readable listing.
+
+    The listing is a fake C++ header: "namespace World { inline uint64_t
+    OwningGameInstance = 0x248; ... }", so the struct is the enclosing namespace
+    and members are the inline assignments inside it.
+    """
+    out = {}
+    current = None
+    for line in markdown.splitlines():
+        ns = NAMESPACE_RE.search(line)
+        if ns:
+            current = ns.group("struct")
+            out.setdefault(current, {})
+            continue
+        if current is None:
+            continue
+        member = MEMBER_RE.search(line)
+        if member:
+            out[current][member.group("field")] = member.group("value")
+    return out
+
+
+def normalize(doc):
+    """Return (structs, globals) whatever shape the dump uses.
+
+    Seen in practice, all for the same build:
+
+      a) {"offsets": {"globals": {...}, "structs": {S: {F: "0x.."}}}}   OffsetDeck
+      b) {"offsets": {"S.F": "0x.."}}                                    flat
+      c) {"offsets": {"structs": {...mostly empty...}}, "offsets_flat": {"S.F": ...}}
+
+    (c) is the trap: the nested map exists but is empty while the data sits in
+    offsets_flat. Picking the "first shape that looks right" silently emitted a
+    header full of zeros, so candidates are collected and the richest one wins.
+    """
+
+    def from_nested(nested):
+        out = {}
+        for name, fields in (nested or {}).items():
+            if isinstance(fields, dict) and fields:
+                out[name] = dict(fields)
+        return out
+
+    def from_flat(flat):
+        out = {}
+        for key, value in (flat or {}).items():
+            if "." not in key:
+                continue
+            struct, _, field = key.partition(".")
+            out.setdefault(struct, {})[field] = value
+        return out
+
+    raw = doc.get("offsets") or {}
+
+    candidates = [
+        from_nested(raw.get("structs")),          # a
+        from_flat(raw),                           # b
+        from_flat(doc.get("offsets_flat")),       # c
+        from_nested(doc.get("structs")),          # a, at the top level
+    ]
+
+    def score(structs):
+        return sum(len(fields) for fields in structs.values())
+
+    structs = max(candidates, key=score)
+    if not structs:
+        return {}, {}
+
+    # (c) only carries the two statics in JSON; the rest of the dump is the
+    # markdown listing ("inline Type Struct::Field = 0x1a2b; // comment"). Parse it
+    # rather than pretending those fields are missing.
+    if score(structs) < 100:
+        from_md = from_markdown_members(doc.get("markdown") or "")
+        for name, fields in from_md.items():
+            merged = structs.setdefault(name, {})
+            for field, value in fields.items():
+                merged.setdefault(field, value)
+
+    globals_ = dict(raw.get("globals") or {})
+    if "UWorld" not in globals_:
+        # In the flat shapes the GWorld static is a field of the pseudo-struct "Class".
+        uw = structs.get("Class", {}).get("UWORLD")
+        if uw is not None:
+            globals_["UWorld"] = uw
+
+    return structs, globals_
+
+
 def hexint(value):
     if isinstance(value, int):
         return value
@@ -122,8 +231,7 @@ def hexint(value):
 def emit(doc, missing, lines):
 
     version = doc.get("version", "unknown")
-    structs = doc["offsets"]["structs"]
-    globals_ = doc["offsets"].get("globals") or {}
+    structs, globals_ = normalize(doc)
 
     def emit_const(name, value, comment):
         lines.append(f"    [[maybe_unused]] constexpr uintptr_t {name:<22} = 0x{value:X};  // {comment}")
@@ -139,7 +247,10 @@ def emit(doc, missing, lines):
     lines.append("")
     for name, recipe in FILL.items():
         if name == "UWorld" and name in globals_:
-            emit_const(name, hexint(globals_[name]), "globals::UWorld")
+            # A static offset is only valid for the build it was dumped from, so
+            # it is emitted with that warning and still validated at runtime by
+            # looks_like_uworld() before anything is read through it.
+            emit_const(name, hexint(globals_[name]), "globals::UWorld (static, per-build)")
             continue
         lines.append(f"    // FILL: {name} — " + recipe[0])
         for extra in recipe[1:]:
@@ -150,7 +261,7 @@ def emit(doc, missing, lines):
         "#pragma once",
         "// ---------------------------------------------------------------------------",
         f"//  offsets_gen.hpp — generated by tools/gen_offsets.py from the",
-        f"//  OffsetDeck Fortnite dump v{version} ({len(structs)} structs,",
+        f"//  Fortnite dump v{version} ({len(structs)} structs,",
         f"//  {sum(len(v) for v in structs.values())} fields).",
         "//",
         "//  DO NOT EDIT BY HAND. Regenerate instead:",
@@ -221,7 +332,7 @@ def emit(doc, missing, lines):
 
 
 def emit_schema(doc, out):
-    structs = doc["offsets"]["structs"]
+    structs, _ = normalize(doc)
     out.append("namespace sch")
     out.append("{")
     out.append("    // whole dump, for grep-ability. Nothing reads this at runtime and it")

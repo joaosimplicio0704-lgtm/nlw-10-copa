@@ -30,6 +30,10 @@ BANNER = """\
 //    fortnite-external/fortnite_external.cpp
 //    fortnite-external/offsets_gen.hpp   (tools/gen_offsets.py + the v43.00 dump)
 //
+//  Offsets source: tools/fortnite_offsets_43.00.json (flat <Struct>.<Field> shape).
+//  Both that shape and the older offsets.structs shape are accepted by
+//  gen_offsets.py; the header records which fields are missing as // FILL:.
+//
 //  Edit those two, then regenerate:
 //    python3 tools/build_single.py
 //
