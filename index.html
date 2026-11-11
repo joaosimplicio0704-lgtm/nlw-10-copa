@@ -1,26 +1,101 @@
 <!DOCTYPE html>
-<html lang="pt-br">
-  <head>
-    <meta charset="UTF-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Calendário de Jogos - NLW Copa</title>
-    <link rel="stylesheet" href="./style.css" />
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>IA do zero</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>IA do zero</h1>
+    <p>rede neural + parser de código + analisador estático. tudo escrito na mão, sem biblioteca externa.</p>
+  </header>
 
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Roboto:wght@700;900&display=swap"
-      rel="stylesheet"
-    />
-  </head>
-  <body class="blue">
-    <div id="app">
-      <header>
-        <img src="./assets/logo.svg" alt="Logo da NLW" />
-      </header>
-      <main id="cards"></main>
-    </div>
-    <script src="./main.js"></script>
-  </body>
+  <nav class="tabs">
+    <button class="tab active" data-view="view-train">treino</button>
+    <button class="tab" data-view="view-analyze">analisar código</button>
+    <button class="tab" data-view="view-net">rede neural</button>
+    <button class="tab" data-view="view-conf">confiança</button>
+  </nav>
+
+  <main>
+    <!-- treino -->
+    <section class="panel-view active" id="view-train">
+      <div class="panel">
+        <div class="row">
+          <button id="trainBtn">treinar (contínuo)</button>
+          <button id="stepBtn">treinar 10 épocas</button>
+          <button id="resetBtn">resetar rede</button>
+          <button id="saveBtn">salvar modelo</button>
+          <button id="loadBtn">carregar modelo</button>
+        </div>
+        <div class="stats">
+          <span>épocas: <b id="epoch">0</b></span>
+          <span>erro: <b id="error">-</b></span>
+        </div>
+        <canvas id="chart" width="420" height="160"></canvas>
+      </div>
+      <div class="row compact">
+        <label>camada para heatmap de pesos</label>
+        <select id="layerSelect">
+          <option value="0">oculta 1 (16×16)</option>
+          <option value="1">oculta 2 (16×16)</option>
+          <option value="2">saída (4×16)</option>
+        </select>
+        <canvas id="heatCanvas" width="320" height="160"></canvas>
+      </div>
+    </section>
+
+    <!-- analisar código -->
+    <section class="panel-view" id="view-analyze">
+      <div class="panel">
+        <label>trecho de código JavaScript</label>
+        <textarea id="codeInput" rows="6">function soma(a, b) {
+  if (a > 0) {
+    return a + b;
+  }
+  return 0;
+}</textarea>
+        <div class="row">
+          <button id="predictBtn">prever classe (rede)</button>
+          <button id="analyzeBtn">analisar estático</button>
+        </div>
+        <div id="result" class="result-empty">--</div>
+        <div id="confidence" class="confidence"></div>
+        <div id="analysisOutput" class="analysis-output"></div>
+      </div>
+    </section>
+
+    <!-- rede neural -->
+    <section class="panel-view" id="view-net">
+      <div class="panel net-panel">
+        <canvas id="netCanvas" width="640" height="300"></canvas>
+      </div>
+    </section>
+
+    <!-- confiança -->
+    <section class="panel-view" id="view-conf">
+      <div class="panel">
+        <label>saída da rede (probabilidades por classe)</label>
+        <div id="confidence2" class="confidence"></div>
+        <canvas id="confCanvas" width="320" height="200"></canvas>
+      </div>
+    </section>
+
+    <!-- log -->
+    <section class="panel">
+      <label>log</label>
+      <div id="log" class="log"></div>
+    </section>
+  </main>
+
+  <footer>
+    camadas: 16 → 16 → 16 → 4 | ativação: sigmoid | otimizador: Adam | entrada: 16 features (tokenizador real) <br>
+    classes: <b>variável/atribuição</b>, <b>função</b>, <b>fluxo de controle</b>, <b>misto/complexo</b> <br>
+    pesos persistidos em JSON no localStorage
+  </footer>
+
+  <script type="module" src="main.js"></script>
+</body>
 </html>
