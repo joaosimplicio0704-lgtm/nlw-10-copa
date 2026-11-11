@@ -1,56 +1,67 @@
-/* IA do zero — aplicação completa.
-   Modos: treino / analisar / playground.
-   Rede neural escrita na mão (Matrix + Dense + Model + otimizadores),
-   parser de código JS real, analisador de complexidade/bugs,
-   visualização de pesos, heatmap e matriz de confusão.
+/* IA do zero — assistente de programação com rede neural própria.
+   Rede neural (Matrix + Network com Adam) + parser de JS + base de conhecimento.
+   Memória persistente em localStorage: os pesos e o treino não somem ao recarregar.
 */
 import { Trainer } from './ai/trainer.js';
-import { Model } from './ai/model.js';
-import { getSNIPPETS, LABELS, getRawDataset } from './ai/dataset.js';
+import { Network } from './ai/network.js';
+import { getSNIPPETS, LABELS } from './ai/dataset.js';
 import { extractFeatures, classifyHeuristic, tokenize } from './ai/parser.js';
-import { complexity, bugPatterns, maintainability } from './ai/analyzer.js';
+import { detectLanguage, CONCEPTS, findConcept } from './ai/knowledge.js';
 import { Visualizer } from './ai/visualizer.js';
 
-const dataset = getRawDataset().map((d) => ({
-  input: extractFeatures(d.snippet).featureVector,
-  target: oneHot(d.label, 4),
-  snippet: d.snippet,
-  label: d.label,
+const snippets = getSNIPPETS();
+const dataset = snippets.map((s) => ({
+  input: extractFeatures(s).featureVector,
+  target: oneHot(classifyHeuristic(s), 4),
+  snippet: s,
+  label: classifyHeuristic(s),
 }));
+
+function oneHot(index, size) {
+  return Array.from({ length: size }, (_, i) => (i === index ? 1 : 0));
+}
 
 const trainer = new Trainer({
   layerSizes: [16, 16, 16, 4],
-  activation: 'sigmoid',
-  optimizer: 'adam',
   lr: 0.001,
 });
 
 const $ = (id) => document.getElementById(id);
 
-// elementos UI
+// ---------- elementos ----------
 const tabs = document.querySelectorAll('.tab');
 const panels = document.querySelectorAll('.panel-view');
+
 const trainBtn = $('trainBtn');
 const stepBtn = $('stepBtn');
 const resetBtn = $('resetBtn');
 const saveBtn = $('saveBtn');
 const loadBtn = $('loadBtn');
+const exportBtn = $('exportBtn');
+const importFile = $('importFile');
+const importBtn = $('importBtn');
+const clearMemBtn = $('clearMemBtn');
+
+const sendBtn = $('sendBtn');
+const chatInput = $('chatInput');
+const chatMessages = $('chatMessages');
+
+const snippetInput = $('snippetInput');
 const predictBtn = $('predictBtn');
 const analyzeBtn = $('analyzeBtn');
-const snippetInput = $('snippetInput');
-const codeInput = $('codeInput');
+
 const epochDisplay = $('epoch');
 const errorDisplay = $('error');
+const trainedDisplay = $('trained');
 const resultDisplay = $('result');
 const logDisplay = $('log');
-const analysisOutput = $('analysisOutput');
+const confContainer = $('confidence');
 
 const chart = $('chart');
 const cctx = chart.getContext('2d');
 const netCanvas = $('netCanvas');
 const heatCanvas = $('heatCanvas');
 const confCanvas = $('confCanvas');
-const confContainer = $('confidence');
 const layerSelect = $('layerSelect');
 
 let running = false;
@@ -59,14 +70,9 @@ let lastPrediction = null;
 let visualizer = new Visualizer(netCanvas, heatCanvas, confCanvas);
 
 // ---------- utils ----------
-
-function oneHot(index, size) {
-  return Array.from({ length: size }, (_, i) => (i === index ? 1 : 0));
-}
-
 function log(msg) {
   const line = document.createElement('div');
-  line.textContent = msg;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
   logDisplay.prepend(line);
 }
 
@@ -74,6 +80,7 @@ function updateStats() {
   epochDisplay.textContent = trainer.epoch;
   const last = trainer.history[trainer.history.length - 1];
   errorDisplay.textContent = last ? last.error.toFixed(6) : '-';
+  trainedDisplay.textContent = trainer.totalTrained;
 }
 
 function drawChart() {
@@ -83,32 +90,32 @@ function drawChart() {
   cctx.clearRect(0, 0, w, h);
   if (history.length < 2) return;
 
-  cctx.strokeStyle = '#00ff9d';
+  cctx.strokeStyle = '#6ee7b7';
   cctx.lineWidth = 2;
   cctx.beginPath();
   const maxErr = Math.max(...history.map((e) => e.error), 0.1);
   const stepX = w / Math.max(history.length - 1, 1);
   history.forEach((e, i) => {
     const x = i * stepX;
-    const y = h - (e.error / maxErr) * (h - 40) - 20;
+    const y = h - (e.error / maxErr) * (h - 32) - 16;
     if (i === 0) cctx.moveTo(x, y);
     else cctx.lineTo(x, y);
   });
   cctx.stroke();
 
-  cctx.fillStyle = '#888';
+  cctx.fillStyle = '#94a3b8';
   cctx.font = '10px monospace';
-  cctx.fillText(`erro: ${history[history.length - 1].error.toFixed(4)}`, 5, h - 5);
-  cctx.fillText(`épocas: ${history.length}`, w - 60, h - 5);
+  cctx.fillText(`erro: ${history[history.length - 1].error.toFixed(4)}`, 6, h - 6);
+  cctx.fillText(`épocas: ${history.length}`, w - 70, h - 6);
 }
 
 function drawNetwork(activationsSnapshot = null) {
-  visualizer.drawNetwork(trainer.model, activationsSnapshot);
+  visualizer.drawNetwork(trainer.network, activationsSnapshot);
 }
 
 function drawHeatmap() {
   const layerIdx = parseInt(layerSelect.value, 10);
-  const layer = trainer.model.layers[layerIdx];
+  const layer = trainer.network.layers[layerIdx];
   visualizer.drawHeatmap(layer.w);
 }
 
@@ -123,8 +130,6 @@ function drawConfidence(probs, classIdx) {
     labelEl.className = 'conf-label';
     const fill = document.createElement('div');
     fill.className = 'conf-fill';
-    fill.style.width = `${(probs[i] || 0) * 100}%`;
-    fill.style.background = i === classIdx ? '#00ff9d' : '#232a30';
     const val = document.createElement('span');
     val.textContent = ((probs[i] || 0) * 100).toFixed(1) + '%';
     val.className = 'conf-val';
@@ -133,10 +138,15 @@ function drawConfidence(probs, classIdx) {
     bar.appendChild(val);
     confContainer.appendChild(bar);
   });
+  // anima preenchimento
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.conf-fill').forEach((el, idx) => {
+      el.classList.add('filled');
+    });
+  });
 }
 
 // ---------- treinamento ----------
-
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -160,53 +170,95 @@ trainBtn.addEventListener('click', () => {
   running = true;
   trainBtn.disabled = true;
   stepBtn.disabled = true;
+  log('treino contínuo iniciado');
   loop();
 });
 
 stepBtn.addEventListener('click', () => {
   trainBatch(10);
+  log(`treino: +10 épocas (total ${trainer.epoch})`);
 });
 
 resetBtn.addEventListener('click', () => {
   running = false;
-  trainer = new Trainer({
-    layerSizes: [16, 16, 16, 4],
-    activation: 'sigmoid',
-    optimizer: 'adam',
-    lr: 0.001,
-  });
+  trainer.reset();
   updateStats();
   drawChart();
   drawNetwork();
   drawHeatmap();
-  log('rede resetada');
+  log('memória da IA resetada (pesos apagados)');
   trainBtn.disabled = false;
   stepBtn.disabled = false;
 });
 
 saveBtn.addEventListener('click', () => {
-  localStorage.setItem('ia_model', JSON.stringify(trainer.toJSON()));
-  log('modelo salvo (pesos + épocas + histórico)');
+  trainer.save();
+  log('memória salva no navegador (localStorage)');
 });
 
 loadBtn.addEventListener('click', () => {
-  const raw = localStorage.getItem('ia_model');
-  if (!raw) { log('nenhum modelo salvo'); return; }
+  // já carrega no construtor, mas forçamos recarregar
+  const raw = localStorage.getItem('ia_memoria_v2');
+  if (!raw) { log('nenhuma memória salva'); return; }
   try {
-    trainer = Trainer.fromJSON(JSON.parse(raw), {
-      layerSizes: [16, 16, 16, 4],
-      activation: 'sigmoid',
-      optimizer: trainer.model.optimizerName,
-      lr: trainer.model.lr,
-    });
+    const payload = JSON.parse(raw);
+    trainer.network = Network.fromJSON(payload.network);
+    trainer.epoch = payload.epoch || 0;
+    trainer.lr = payload.lr || 0.001;
+    trainer.history = payload.history || [];
+    trainer.totalTrained = payload.totalTrained || 0;
     updateStats();
     drawChart();
     drawNetwork();
     drawHeatmap();
-    log('modelo carregado');
+    log('memória recarregada do navegador');
   } catch (e) {
-    log('falha ao carregar: ' + e.message);
+    log('falha ao carregar memória: ' + e.message);
   }
+});
+
+exportBtn.addEventListener('click', () => {
+  const json = trainer.exportJSON();
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ia_memoria.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  log('memória exportada para ia_memoria.json');
+});
+
+importBtn.addEventListener('click', () => {
+  importFile.click();
+});
+
+importFile.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    if (trainer.importJSON(ev.target.result)) {
+      updateStats();
+      drawChart();
+      drawNetwork();
+      drawHeatmap();
+      log('memória importada com sucesso');
+    } else {
+      log('falha ao importar memória');
+    }
+  };
+  reader.readAsText(file);
+});
+
+clearMemBtn.addEventListener('click', () => {
+  if (!confirm('apagar toda a memória da IA (pesos e treino)?')) return;
+  trainer.reset();
+  updateStats();
+  drawChart();
+  drawNetwork();
+  drawHeatmap();
+  log('memória apagada');
 });
 
 function loop() {
@@ -219,39 +271,134 @@ function loop() {
   raf = requestAnimationFrame(loop);
 }
 
-// ---------- previsão / análise ----------
+// ---------- previsão de código ----------
+import { Matrix } from './ai/matrix.js';
 
 predictBtn.addEventListener('click', () => {
   const snippet = snippetInput.value.trim();
   if (!snippet) return;
+  doPredict(snippet);
+});
+
+snippetInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    const snippet = snippetInput.value.trim();
+    if (snippet) doPredict(snippet);
+  }
+});
+
+function doPredict(snippet) {
   const input = extractFeatures(snippet).featureVector;
-  const f = trainer.model.forward(Matrix.fromArray(input));
-  const outputActivations = f;
-  const arr = outputActivations.data.map((row) => row[0]);
-  const classIdx = arr.indexOf(Math.max(...arr));
-  lastPrediction = { input, probs: arr, classIdx, snippet };
+  const pred = trainer.network.predict(input);
+  lastPrediction = { input, probs: pred.probs, classIdx: pred.classIdx, snippet };
 
-  resultDisplay.textContent = `${snippet} → ${LABELS[classIdx]}`;
+  resultDisplay.textContent = `${snippet} → ${LABELS[pred.classIdx]}`;
   resultDisplay.className = 'prediction';
-  drawConfidence(arr, classIdx);
+  drawConfidence(pred.probs, pred.classIdx);
 
-  // captura ativações por camada para visualizar
+  // captura ativações por camada
   const acts = [];
   let a = Matrix.fromArray(input);
   acts.push(a);
-  for (const layer of trainer.model.layers) {
+  for (const layer of trainer.network.layers) {
     const z = Matrix.add(Matrix.multiply(layer.w, a), layer.b);
     a = Matrix.map(z, layer.activation.fn);
     acts.push(a);
   }
   drawNetwork(acts);
-  log(`previsão: ${LABELS[classIdx]} | confiança ${(Math.max(...arr) * 100).toFixed(1)}%`);
+  log(`previsão: ${LABELS[pred.classIdx]} | confiança ${(Math.max(...pred.probs) * 100).toFixed(1)}%`);
+}
+
+// ---------- chat com a IA ----------
+function addMessage(text, who) {
+  const div = document.createElement('div');
+  div.className = 'message ' + who;
+  const content = document.createElement('div');
+  content.className = 'message-content';
+  content.textContent = text;
+  div.appendChild(content);
+  chatMessages.appendChild(div);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function botTyping() {
+  const div = document.createElement('div');
+  div.className = 'message bot typing';
+  div.id = 'typing';
+  const content = document.createElement('div');
+  content.className = 'message-content';
+  content.textContent = 'digitando...';
+  div.appendChild(content);
+  chatMessages.appendChild(div);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return div;
+}
+
+function removeTyping() {
+  const t = $('typing');
+  if (t) t.remove();
+}
+
+function buildSystemPrompt() {
+  return `Você é uma IA de programação escrita do zero (rede neural própria, sem biblioteca externa).
+Sua memória (pesos da rede) está salva no navegador do usuário.
+Responda em português, de forma direta e útil, focada em programação.
+Se não souber algo, diga que está aprendendo e pode ser treinado com exemplos.`;
+}
+
+function generateReply(userMsg) {
+  // 1. tenta reconhecer conceito da base de conhecimento
+  const concept = findConcept(userMsg);
+  if (concept) {
+    return concept;
+  }
+
+  // 2. se é código, classifica e dá dica
+  const trimmed = userMsg.trim();
+  if (/[{}\(\);]/.test(trimmed) || /function|const |let |for |if |while /.test(trimmed)) {
+    const lang = detectLanguage(trimmed);
+    const pred = trainer.predictSnippet(trimmed);
+    let reply = `Analisei seu trecho (${lang}).\n`;
+    reply += `A rede neural classifica como: ${LABELS[pred.classIdx]}\n`;
+    reply += `Confiança: ${(Math.max(...pred.probs) * 100).toFixed(1)}%\n`;
+    reply += `Sugestão de treino: me envie mais exemplos como este e clique em "treinar" para a IA aprender.`;
+    return reply;
+  }
+
+  // 3. resposta genérica de aprendizado
+  const greetings = ['oi', 'ola', 'olá', 'bom dia', 'boa tarde', 'boa noite', 'e ai', 'eaí'];
+  const low = userMsg.toLowerCase();
+  if (greetings.some((g) => low.includes(g))) {
+    return 'Oi! Sou sua IA de programação. Pode colar código aqui que eu analiso, ou me perguntar sobre variáveis, funções, laços, condicionais, arrays, promises e APIs. Quer treinar a IA? Use a aba "treino".';
+  }
+
+  return 'Estou aprendendo ainda. Tente me mostrar um trecho de código ou perguntar sobre um conceito de programação (variável, função, laço, condicional, array, promise, api, debug, complexidade).';
+}
+
+sendBtn.addEventListener('click', () => {
+  const text = chatInput.value.trim();
+  if (!text) return;
+  addMessage(text, 'user');
+  chatInput.value = '';
+  const typing = botTyping();
+  setTimeout(() => {
+    removeTyping();
+    const reply = generateReply(text);
+    addMessage(reply, 'bot');
+  }, 600);
 });
 
-import { Matrix } from './ai/matrix.js';
+chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendBtn.click();
+  }
+});
 
+// ---------- analisar código estático ----------
 analyzeBtn.addEventListener('click', () => {
-  const code = codeInput.value.trim();
+  const code = snippetInput.value.trim();
   if (!code) return;
   const m = maintainability(code);
   const pred = trainer.predictSnippet(code);
@@ -276,14 +423,14 @@ analyzeBtn.addEventListener('click', () => {
     html += `<div class="bugs"><strong>padrões suspeitos:</strong> nenhum detectado.</div>`;
   }
 
-  analysisOutput.innerHTML = html;
-  log(`análise: ${m.complexity.tokens} tokens, complexidade ${m.complexity.cyclomatic}, ${m.bugs.length} padrão(s) suspeito(s)`);
+  // mostrar na área de resultado do treino (ou criar um output dedicado)
+  resultDisplay.innerHTML = html;
+  resultDisplay.className = '';
+  drawConfidence(pred.probs, pred.classIdx);
+  log(`análise estática: ${m.complexity.tokens} tokens, complexidade ${m.complexity.cyclomatic}, ${m.bugs.length} padrão(s)`);
 });
 
-layerSelect.addEventListener('change', drawHeatmap);
-
 // ---------- tabs ----------
-
 tabs.forEach((tab) => {
   tab.addEventListener('click', () => {
     tabs.forEach((t) => t.classList.remove('active'));
@@ -305,10 +452,13 @@ tabs.forEach((tab) => {
 });
 
 // ---------- init ----------
-
 updateStats();
 drawChart();
 drawNetwork();
 drawHeatmap();
-log('IA pronta. rede: 16 → 16 → 16 → 4 | otimizador: Adam | entrada: 16 features reais do parser');
-log('dataset: ' + dataset.length + ' snippets de programação');
+log('IA inicializada. Memória carregada do navegador.');
+log(`épocas treinadas: ${trainer.epoch} | amostras processadas: ${trainer.totalTrained}`);
+log('digite código na barra de busca ou use o chat para conversar.');
+
+// expose pra console
+window.__ia = { trainer, dataset, extractFeatures, classifyHeuristic, predictSnippet: (s) => trainer.predictSnippet(s) };

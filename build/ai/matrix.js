@@ -1,4 +1,4 @@
-/* Matrix math from scratch. Zero dependencies. */
+/* Álgebra linear do zero — sem biblioteca externa. */
 
 class Matrix {
   constructor(rows, cols, data) {
@@ -21,9 +21,22 @@ class Matrix {
     return m.data.map((row) => row[0]);
   }
 
+  static add(a, b) {
+    if (a.rows !== b.rows || a.cols !== b.cols) {
+      throw new Error('dimensões diferentes em add');
+    }
+    const res = new Matrix(a.rows, a.cols);
+    for (let i = 0; i < a.rows; i++) {
+      for (let j = 0; j < a.cols; j++) {
+        res.data[i][j] = a.data[i][j] + b.data[i][j];
+      }
+    }
+    return res;
+  }
+
   static subtract(a, b) {
     if (a.rows !== b.rows || a.cols !== b.cols) {
-      throw new Error('matrizes com dimensões diferentes');
+      throw new Error('dimensões diferentes em subtract');
     }
     const res = new Matrix(a.rows, a.cols);
     for (let i = 0; i < a.rows; i++) {
@@ -36,7 +49,7 @@ class Matrix {
 
   static multiply(a, b) {
     if (a.cols !== b.rows) {
-      throw new Error(`dimensões incompatíveis: ${a.cols} != ${b.rows}`);
+      throw new Error(`incompatível: ${a.cols} != ${b.rows}`);
     }
     const res = new Matrix(a.rows, b.cols);
     for (let i = 0; i < a.rows; i++) {
@@ -71,16 +84,6 @@ class Matrix {
     return res;
   }
 
-  static add(a, b) {
-    const res = new Matrix(a.rows, a.cols);
-    for (let i = 0; i < a.rows; i++) {
-      for (let j = 0; j < a.cols; j++) {
-        res.data[i][j] = a.data[i][j] + b.data[i][j];
-      }
-    }
-    return res;
-  }
-
   randomize(scale = 1) {
     for (let i = 0; i < this.rows; i++) {
       for (let j = 0; j < this.cols; j++) {
@@ -90,11 +93,14 @@ class Matrix {
     return this;
   }
 
-  // inicialização Xavier/Glorot: mantém a variância das ativações estável pelas camadas
   static xavier(rows, cols) {
     const limit = Math.sqrt(6 / (rows + cols));
     const m = new Matrix(rows, cols);
     return m.randomize(limit);
+  }
+
+  clone() {
+    return new Matrix(this.rows, this.cols, this.data.map((row) => [...row]));
   }
 }
 

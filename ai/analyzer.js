@@ -1,9 +1,8 @@
-/* Analisador estático de código.
-   Métricas de complexidade (estilo ciclomático simplificado) e detecção de
-   padrões suspeitos (possíveis bugs) — tudo heurístico, feito na mão.
+/* Analisador estático de código: complexidade ciclomática + padrões suspeitos.
+   Feito na mão, sem biblioteca externa.
 */
 
-import { tokenize, extractFeatures } from './parser.js';
+import { tokenize } from './parser.js';
 
 function complexity(code) {
   const tokens = tokenize(code);
@@ -22,7 +21,6 @@ function complexity(code) {
     if (v === '}') depth = Math.max(0, depth - 1);
   }
 
-  // complexidade ciclomática simplificada: decisões + 1
   return {
     decisions,
     maxDepth,
@@ -38,10 +36,6 @@ function bugPatterns(code) {
   lines.forEach((line, idx) => {
     const trimmed = line.trim();
     const num = idx + 1;
-
-    if (/\bif\s*\(/.test(trimmed) && !/\{\s*$/.test(trimmed) && !/;\s*$/.test(trimmed)) {
-      // if sem bloco na mesma linha é aceitável; ignore
-    }
     if (/\b==[^=]/.test(trimmed) && !/===/.test(trimmed)) {
       issues.push({ line: num, type: 'loose-equality', message: 'use === ao invés de ==' });
     }
@@ -51,24 +45,14 @@ function bugPatterns(code) {
     if (/\beval\s*\(/.test(trimmed)) {
       issues.push({ line: num, type: 'eval', message: 'eval() é perigoso e de difícil otimização' });
     }
-    if (/console\.(log|error|warn)/.test(trimmed) && /\/\/\s*todo/i.test(trimmed) === false) {
-      // permitir, só marca se parecer leftovers
-      if (/console\.log\(.*['"]\s*(debug|temp|test|foo|bar)/i.test(trimmed)) {
-        issues.push({ line: num, type: 'debug-log', message: 'possível log de debug deixado no código' });
-      }
+    if (/console\.log\(.*['"]\s*(debug|temp|test|foo|bar)/i.test(trimmed)) {
+      issues.push({ line: num, type: 'debug-log', message: 'possível log de debug deixado no código' });
     }
-    if (trimmed.match(/\bfor\s*\(.*;\s*.*;\s*$/i) && !/\{\s*$/.test(trimmed)) {
+    if (/\bfor\s*\(.*;\s*.*;\s*$/i.test(trimmed) && !/\{\s*$/.test(trimmed)) {
       issues.push({ line: num, type: 'empty-loop-body', message: 'for com corpo vazio (possível ponto-e-vírgula esquecido)' });
-    }
-    if (/(function\s+\w+\s*\([^)]*\)\s*\{[^}]*\}){10,}/.test(trimmed)) {
-      issues.push({ line: num, type: 'long-line', message: 'linha muito complexa, considere quebrar' });
-    }
-    if (/\.length\s*==\s*0/.test(trimmed)) {
-      issues.push({ line: num, type: 'length-check', message: 'use .length === 0 ou Array.isArray + vazio adequado' });
     }
   });
 
-  // detectar variável usada antes de declarar (heurística simples, reserva)
   return issues;
 }
 

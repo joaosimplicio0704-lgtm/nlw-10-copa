@@ -1,4 +1,4 @@
-/* Activation functions and their derivatives. */
+/* Funções de ativação e derivadas. */
 
 const Activations = {
   sigmoid: {
@@ -9,19 +9,13 @@ const Activations = {
     fn: (x) => Math.max(0, x),
     dfn: (y) => (y > 0 ? 1 : 0),
   },
+  leakyRelu: {
+    fn: (x) => (x > 0 ? x : 0.01 * x),
+    dfn: (y) => (y > 0 ? 1 : 0.01),
+  },
   tanh: {
     fn: (x) => Math.tanh(x),
     dfn: (y) => 1 - y * y,
-  },
-  softmax: {
-    fn: (x) => {
-      const m = Math.max(...x);
-      const exps = x.map((v) => Math.exp(v - m));
-      const sum = exps.reduce((a, b) => a + b, 0);
-      return exps.map((v) => v / sum);
-    },
-    // softmax derivative is a Jacobian; handled separately in cross-entropy
-    dfn: null,
   },
 };
 

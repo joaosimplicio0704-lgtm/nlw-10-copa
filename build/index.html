@@ -3,25 +3,25 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>IA do zero</title>
+  <title>IA do zero — assistente de programação</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
   <header>
     <div class="brand"><div class="dot"></div> IA do zero</div>
-    <p>rede neural + parser de código + analisador estático. tudo escrito do zero, sem biblioteca externa.</p>
+    <p>rede neural escrita do zero · memória persistente no navegador · sem biblioteca externa</p>
   </header>
 
   <div class="search-wrap">
     <input type="text" class="search-bar" id="snippetInput"
-      placeholder="cole um trecho de código JavaScript…"
+      placeholder="cole código ou escreva para a IA…"
       value="function init() { for (let i = 0; i < n; i++) { if (ok) { return i; } } }" />
   </div>
 
   <nav class="tabs">
     <button class="tab active" data-view="view-train">treino</button>
-    <button class="tab" data-view="view-analyze">analisar código</button>
+    <button class="tab" data-view="view-chat">chat com a IA</button>
     <button class="tab" data-view="view-net">rede neural</button>
     <button class="tab" data-view="view-conf">confiança</button>
   </nav>
@@ -34,53 +34,66 @@
           <button id="trainBtn">treinar (contínuo)</button>
           <button id="stepBtn">treinar 10 épocas</button>
           <button id="resetBtn">resetar rede</button>
-          <button id="saveBtn">salvar modelo</button>
-          <button id="loadBtn">carregar modelo</button>
+          <button id="saveBtn">salvar memória</button>
+          <button id="loadBtn">carregar memória</button>
+          <button id="exportBtn">exportar JSON</button>
+          <button id="importBtn">importar JSON</button>
+          <button id="clearMemBtn" style="background:#f87171;color:#030712">apagar memória</button>
+          <input type="file" id="importFile" style="display:none" accept=".json" />
         </div>
         <div class="stats">
           <span class="stat-item"><span class="stat-dot"></span> épocas: <b id="epoch">0</b></span>
           <span class="stat-item">erro: <b id="error">-</b></span>
+          <span class="stat-item">amostras: <b id="trained">0</b></span>
         </div>
-        <canvas id="chart" width="700" height="200"></canvas>
+        <canvas id="chart" width="760" height="200"></canvas>
       </div>
 
       <div class="panel" style="margin-top:14px">
-        <label style="display:block;margin-bottom:8px;font-size:12px;color:var(--muted);font-weight:600;letter-spacing:0.05em;text-transform:uppercase">heatmap de pesos por camada</label>
-        <div class="row compact" style="align-items:flex-start">
+        <div class="row compact" style="align-items:flex-start;gap:12px">
+          <label style="font-size:12px;color:var(--muted);font-weight:600;letter-spacing:0.05em;text-transform:uppercase">heatmap de pesos</label>
           <select id="layerSelect">
             <option value="0">oculta 1 (16×16)</option>
             <option value="1">oculta 2 (16×16)</option>
             <option value="2">saída (4×16)</option>
           </select>
-          <canvas id="heatCanvas" width="340" height="180" style="margin-left:12px"></canvas>
+          <canvas id="heatCanvas" width="300" height="150" style="margin-left:10px"></canvas>
         </div>
       </div>
-    </section>
 
-    <!-- analisar código -->
-    <section class="panel-view" id="view-analyze">
-      <div class="panel">
-        <label>trecho de código JavaScript</label>
-        <textarea id="codeInput" rows="6">function soma(a, b) {
-  if (a > 0) {
-    return a + b;
-  }
-  return 0;
-}</textarea>
-        <div class="row">
+      <div class="panel" style="margin-top:14px">
+        <label>prever classe de um código</label>
+        <input type="text" id="codePredInput" class="search-bar"
+          placeholder="ex: function soma(a, b) { return a + b; }"
+          value="function init() { for (let i = 0; i < n; i++) { if (ok) { return i; } } }" />
+        <div class="row" style="margin-top:8px">
           <button id="predictBtn">prever classe (rede)</button>
           <button id="analyzeBtn">analisar estático</button>
         </div>
         <div id="result" class="result-empty">--</div>
         <div id="confidence" class="confidence"></div>
-        <div id="analysisOutput" class="analysis-output"></div>
+      </div>
+    </section>
+
+    <!-- chat -->
+    <section class="panel-view" id="view-chat">
+      <div class="panel chat-panel">
+        <div id="chatMessages" class="chat-messages">
+          <div class="message bot">
+            <div class="message-content">Olá! Sou sua IA de programação escrita do zero. Minha memória (pesos da rede neural) fica salva neste navegador. Pode colar código para eu analisar, perguntar sobre conceitos (variável, função, laço, array, promise, api) ou usar a aba "treino" para eu aprender com exemplos.</div>
+          </div>
+        </div>
+        <div class="chat-input-wrap">
+          <input type="text" id="chatInput" class="search-bar" placeholder="escreva para a IA…" />
+          <button id="sendBtn">enviar</button>
+        </div>
       </div>
     </section>
 
     <!-- rede neural -->
     <section class="panel-view" id="view-net">
       <div class="panel net-panel">
-        <canvas id="netCanvas" width="720" height="340"></canvas>
+        <canvas id="netCanvas" width="760" height="380"></canvas>
       </div>
     </section>
 
@@ -89,7 +102,7 @@
       <div class="panel">
         <label>saída da rede (probabilidades por classe)</label>
         <div id="confidence2" class="confidence"></div>
-        <canvas id="confCanvas" width="340" height="220"></canvas>
+        <canvas id="confCanvas" width="340" height="240"></canvas>
       </div>
     </section>
 
@@ -101,7 +114,7 @@
   </main>
 
   <footer>
-    camadas: 16 → 16 → 16 → 4 &nbsp;|&nbsp; ativação: sigmoid &nbsp;|&nbsp; otimizador: Adam &nbsp;|&nbsp; entrada: 16 features reais do parser &nbsp;|&nbsp; pesos persistidos em JSON no localStorage
+    camadas: 16 → 16 → 16 → 4 &nbsp;|&nbsp; ativação: sigmoid &nbsp;|&nbsp; otimizador: Adam &nbsp;|&nbsp; entrada: 16 features reais do parser &nbsp;|&nbsp; pesos persistidos em JSON no localStorage (não some ao recarregar)
   </footer>
 
   <script type="module" src="main.js"></script>

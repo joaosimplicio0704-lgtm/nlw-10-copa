@@ -1,5 +1,5 @@
-/* Dataset sintético de programação (snippets JavaScript com rótulo heurístico).
-   Serve como treino inicial. Cada amostra vira feature vector pelo parser real.
+/* Dataset sintético de programação (23 snippets JavaScript rotulados).
+   É o material de treino inicial da IA.
 */
 
 const SNIPPETS = [
@@ -31,7 +31,6 @@ const SNIPPETS = [
 const LABELS = ['variável/atribuição', 'função', 'fluxo de controle', 'misto/complexo'];
 
 export { SNIPPETS, LABELS };
-export const getSNIPPETS = () => SNIPPETS;
 
 export function getSnippets() {
   return SNIPPETS;
@@ -43,16 +42,3 @@ export function getRawDataset() {
     label: classifyHeuristic(snippet),
   }));
 }
-
-function classifyHeuristic(code) {
-  const s = code.toLowerCase();
-  const hasLoop = /for|while/.test(s);
-  const hasCond = /if|else|switch/.test(s);
-  const hasFunc = /function|=>/.test(s);
-  if (hasFunc && (hasLoop || hasCond)) return 3;
-  if (hasFunc) return 1;
-  if (hasLoop || hasCond) return 2;
-  return 0;
-}
-
-export { classifyHeuristic };

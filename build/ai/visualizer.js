@@ -1,5 +1,4 @@
-/* Visualizações: heatmap de pesos, matriz de confusão, grafo da arquitetura.
-*/
+/* Visualizações: rede neural, heatmap de pesos, matriz de confusão. */
 
 class Visualizer {
   constructor(netCanvas, heatCanvas, confCanvas) {
@@ -11,17 +10,17 @@ class Visualizer {
     this.confCtx = confCanvas.getContext('2d');
   }
 
-  drawNetwork(model, inputActivations = null) {
-    const { layers } = model;
+  drawNetwork(network, inputActivations = null) {
+    const { layers } = network;
     const w = this.netCanvas.width;
     const h = this.netCanvas.height;
     const ctx = this.netCtx;
     ctx.clearRect(0, 0, w, h);
 
-    const layerSizes = [model.layerSizes[0], ...layers.map((l) => l.outputSize)];
+    const layerSizes = [network.layerSizes[0], ...layers.map((l) => l.outputSize)];
     const positions = layerSizes.map((size, li) => {
       const ys = [];
-      const padding = 40;
+      const padding = 45;
       const stepY = (h - 2 * padding) / Math.max(size - 1, 1);
       for (let i = 0; i < size; i++) {
         const x = padding + (li / Math.max(layerSizes.length - 1, 1)) * (w - 2 * padding);
@@ -46,8 +45,8 @@ class Visualizer {
           ctx.moveTo(from[i].x, from[i].y);
           ctx.lineTo(to[j].x, to[j].y);
           ctx.strokeStyle = weight >= 0
-            ? `rgba(0,255,157,${opacity * 0.4})`
-            : `rgba(255,60,60,${opacity * 0.4})`;
+            ? `rgba(110,231,183,${opacity * 0.45})`
+            : `rgba(248,113,113,${opacity * 0.45})`;
           ctx.lineWidth = 0.4 + abs * 3;
           ctx.stroke();
         }
@@ -64,9 +63,9 @@ class Visualizer {
         }
         ctx.beginPath();
         ctx.arc(node.x, node.y, 7, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(0,255,157,${0.15 + active * 0.85})`;
+        ctx.fillStyle = `rgba(110,231,183,${0.15 + active * 0.85})`;
         ctx.fill();
-        ctx.strokeStyle = `rgba(0,255,157,${0.3 + active * 0.7})`;
+        ctx.strokeStyle = `rgba(110,231,183,${0.3 + active * 0.7})`;
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
@@ -74,16 +73,16 @@ class Visualizer {
         const b = layers[li] ? (layers[li].b.data[ni] ? layers[li].b.data[ni][0] : 0) : 0;
         ctx.beginPath();
         ctx.arc(node.x, node.y, 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = b >= 0 ? '#00ff9d' : '#ff3c3c';
+        ctx.fillStyle = b >= 0 ? '#6ee7b7' : '#f87171';
         ctx.fill();
       });
     });
 
     // rótulos
-    ctx.fillStyle = '#889097';
-    ctx.font = '10px monospace';
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '11px monospace';
     positions.forEach((layer, li) => {
-      ctx.fillText(labelNames[li], layer[0].x - 14, 20);
+      ctx.fillText(labelNames[li], layer[0].x - 16, 24);
     });
   }
 
@@ -108,13 +107,12 @@ class Visualizer {
         const v = matrix.data[i][j];
         const intensity = maxAbs === 0 ? 0 : Math.abs(v) / maxAbs;
         ctx.fillStyle = v >= 0
-          ? `rgba(0,255,157,${intensity * 0.6})`
-          : `rgba(255,60,60,${intensity * 0.6})`;
+          ? `rgba(110,231,183,${0.15 + intensity * 0.85})`
+          : `rgba(248,113,113,${0.15 + intensity * 0.85})`;
         ctx.fillRect(j * cellW, i * cellH, cellW, cellH);
       }
     }
-    // grade
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
     ctx.lineWidth = 0.5;
     for (let j = 0; j <= cols; j++) {
       ctx.beginPath(); ctx.moveTo(j * cellW, 0); ctx.lineTo(j * cellW, h); ctx.stroke();
@@ -143,19 +141,18 @@ class Visualizer {
       for (let j = 0; j < n; j++) {
         const v = confusionMatrix[i][j];
         const intensity = maxVal === 0 ? 0 : v / maxVal;
-        ctx.fillStyle = `rgba(0,255,157,${0.15 + intensity * 0.85})`;
+        ctx.fillStyle = `rgba(110,231,183,${0.15 + intensity * 0.85})`;
         ctx.fillRect(j * cellW, i * cellH, cellW, cellH);
-        ctx.fillStyle = '#e8eaed';
+        ctx.fillStyle = '#f3f4f6';
         ctx.font = '11px monospace';
         ctx.fillText(v.toString(), j * cellW + cellW / 2 - 5, i * cellH + cellH / 2 + 4);
       }
     }
-    // eixos
-    ctx.fillStyle = '#889097';
+    ctx.fillStyle = '#94a3b8';
     ctx.font = '10px monospace';
     labels.forEach((label, i) => {
-      ctx.fillText(label, i * cellW + cellW / 2 - 20, h - 5);
-      ctx.fillText(label, 5, i * cellH + cellH / 2 + 4);
+      ctx.fillText(label, i * cellW + cellW / 2 - 22, h - 6);
+      ctx.fillText(label, 4, i * cellH + cellH / 2 + 4);
     });
   }
 }
