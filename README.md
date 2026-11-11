@@ -1,46 +1,35 @@
-<h1 align="center"> NLW #10 Copa </h1>
+# Build — assistente local de programação
 
-<p align="center">
-Evento exclusivo e gratuito, promovido pela Rocketseat para ensino de tecnologias WEB.
-</p>
+A Build é uma interface de trabalho para desenvolver com IA: converse em português, peça ajuda para planejar e gerar código, acompanhe o arquivo no editor e abra uma prévia HTML isolada no navegador. O projeto é leve e roda no seu computador, sem conta ou chave de API.
 
-<p align="center">
-  <a href="#-tecnologias">Tecnologias</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
-  <a href="#-projeto">Projeto</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
-  <a href="#-layout">Layout</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
-  <a href="#memo-licença">Licença</a>
-</p>
+## Executar no computador
 
-<p align="center">
-  <img alt="License" src="https://img.shields.io/static/v1?label=license&message=MIT&color=49AA26&labelColor=000000">
-</p>
+1. Instale o [Ollama](https://ollama.com/download) para Windows, macOS ou Linux.
+2. Baixe o modelo de programação (aprox. 4,7 GB):
+   ```bash
+   ollama pull qwen2.5-coder:7b
+   ```
+3. Inicie o Ollama (normalmente ele fica em execução em segundo plano).
+4. Abra `index.html` no navegador. Se o navegador bloquear a conexão local ao abrir um arquivo, rode um servidor simples nesta pasta:
+   ```bash
+   python -m http.server 8000
+   ```
+   Acesse `http://localhost:8000`.
+5. Clique em **Configurar conexão** para ver as instruções e peça à Build para criar uma página. Use **Executar** para abrir a prévia.
 
-<br>
+A interface chama a API do Ollama em `http://localhost:11434`. O modelo e os arquivos ficam no seu computador. A prévia é renderizada em um iframe com sandbox; o app **não executa comandos arbitrários no terminal nem altera arquivos do seu disco**. O editor da versão atual mostra o HTML gerado, e a execução serve para pré-visualizar esse HTML. Revise sempre o código produzido pela IA.
 
-<p align="center">
-  <img alt="calendario da copa" src=".github/preview.jpg" width="100%">
-</p>
+## Funcionalidades
 
-## 🚀 Tecnologias
+- Interface responsiva com conversa, projeto, editor, prévia e terminal de status.
+- Integração opcional com Ollama local e `qwen2.5-coder:7b`.
+- Geração de páginas autocontidas em HTML a partir de pedidos em português.
+- Prévia isolada no navegador; sem conexão local disponível, sugestões de demonstração informam o próximo passo.
 
-Esse projeto foi desenvolvido com as seguintes tecnologias:
+## Tecnologias
 
-- HTML e CSS
-- JavaScript
-- Git e Github
+HTML, CSS e JavaScript sem dependências de build. Basta servir os arquivos estáticos localmente.
 
-## 💻 Projeto
+## Licença
 
-O Calendário da Copa é um projeto que mostra os jogos da Copa de 2022.
-
-## 🔖 Layout
-
-Você pode visualizar o layout do projeto através [DESSE LINK](https://www.figma.com/file/J1Z33MISC22YZB8wfxiIns/NLW-Copa-Explorer/duplicate). É necessário ter conta no [Figma](https://figma.com) para acessá-lo.
-
-## :memo: Licença
-
-Esse projeto está sob a licença MIT.
-
----
-
-Feito com ♥ by Rocketseat :wave: [Participe da nossa comunidade!](https://discord.gg/rocketseat)
+MIT. Consulte `LICENSE` (a adicionar antes de distribuição formal). Esta interface é uma implementação independente; a referência indicada pelo usuário inspirou a ideia geral de um espaço de desenvolvimento assistido por IA.

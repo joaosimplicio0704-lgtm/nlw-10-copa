@@ -1,32 +1,5 @@
-function createGame(player1, hour, player2) {
-  return `
-    <li>
-      <img src="./assets/icon-${player1}.svg" alt="Bandeira do ${player1}" />
-      <strong>${hour}</strong>
-      <img src="./assets/icon-${player2}.svg" alt="Bandeira da ${player2}" />
-    </li>
-  `
-}
-
-let delay = -0.4;
-function createCard(date, day, games) {
-  delay = delay + 0.4;
-  return `
-    <div class="card" style="animation-delay: ${delay}s">
-      <h2>${date} <span>${day}</span></h2>
-      <ul>
-        ${games}
-      </ul>
-    </div>
-  `
-}
-
-document.querySelector("#cards").innerHTML =
-  createCard("24/11", "quinta", createGame("brazil", "16:00", "serbia")) +
-  createCard(
-    "28/11",
-    "segunda",
-    createGame("switzerland", "13:00", "brazil") +
-      createGame("portugal", "16:00", "uruguai")
-  ) +
-  createCard("02/12", "sexta", createGame("brazil", "16:00", "cameroon"))
+const $=s=>document.querySelector(s);const messages=$('#messages'),promptInput=$('#prompt'),toast=$('#toast');let toastTimer;function notify(text){toast.textContent=text;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),3100)}
+function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function addMessage(text,cls){const el=document.createElement('div');el.className=cls;el.textContent=text;messages.append(el);messages.scrollTop=messages.scrollHeight;return el}
+function answer(text){const clean=text.toLowerCase();let reply='Legal! Vou organizar isso em etapas para deixar o projeto claro e fácil de evoluir. Para começar, preciso entender um pouco mais: qual linguagem ou tecnologia você prefere usar?';if(clean.includes('landing')||clean.includes('site')||clean.includes('página'))reply='Boa ideia! Para essa landing page, sugiro começarmos pela estrutura e pelo objetivo: quem é o público e qual ação principal você quer que a pessoa faça? Posso montar uma versão responsiva em HTML, CSS e JavaScript.\n\nNota: conecte um modelo local pelo botão “Configurar conexão” para gerar arquivos e código reais com a IA.';else if(clean.includes('api')||clean.includes('python'))reply='Vamos estruturar sua API em etapas: 1) definir os recursos e rotas, 2) criar a aplicação e validação, 3) testar os endpoints. Para uma API pequena, FastAPI é uma ótima opção.\n\nConecte o Ollama local para a Build gerar e editar os arquivos do projeto.';else if(clean.includes('organ')||clean.includes('arquivo'))reply='Uma estrutura inicial organizada pode separar responsabilidades: src/ para o código da aplicação, tests/ para testes, README.md para instruções e .env.example para configurações. Me diga a linguagem e o tipo de projeto para adaptar a estrutura.';setTimeout(()=>{const el=document.createElement('div');el.className='assistant-message';el.innerHTML='<div class="assistant-mark tiny">✳</div><div class="message-content"></div>';el.querySelector('.message-content').innerHTML=reply.split('\n\n').map(p=>'<p>'+escapeHtml(p)+'</p>').join('');messages.append(el);messages.scrollTop=messages.scrollHeight},450)}
+let generatedHtml='';function send(text){text=(text||'').trim();if(!text)return;addMessage(text,'user-message');promptInput.value='';promptInput.style.height='';const thinking=addMessage('Conectando ao Ollama local…','thinking');(async()=>{try{const response=await fetch('http://localhost:11434/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'qwen2.5-coder:7b',stream:false,messages:[{role:'system',content:'Você é Build, uma assistente de programação em português. Ajude a planejar e escrever código. Se o pedido for criar interface/site, gere um arquivo HTML completo, autocontido e funcional. Envolva o HTML gerado em um único bloco ```html. Seja objetiva e explique como executar. Nunca alegue que executou código.'},{role:'user',content:text}]})});if(!response.ok)throw Error('Modelo não encontrado ou Ollama indisponível');const data=await response.json();const content=data.message?.content||'Não recebi uma resposta do modelo.';const match=content.match(/```(?:html)?\s*([\s\S]*?)```/i);if(match){generatedHtml=match[1];document.querySelector('#editor').innerHTML=generatedHtml.split('\n').slice(0,25).map((line,i)=>'<div class="code-line"><span class="ln">'+(i+1)+'</span><code>'+escapeHtml(line)+'</code></div>').join('');$('#terminalOutput').innerHTML='<span class="terminal-prompt">$</span> index.html atualizado pelo modelo local';}const el=document.createElement('div');el.className='assistant-message';el.innerHTML='<div class="assistant-mark tiny">✳</div><div class="message-content"></div>';el.querySelector('.message-content').innerHTML=escapeHtml(content).replace(/```(?:html)?/g,'').split('\n').map(p=>'<p>'+p+'</p>').join('');messages.append(el);messages.scrollTop=messages.scrollHeight;$('#connectBtn').textContent='Ollama conectado ✓';document.querySelector('.model-name span').textContent='conectado'}catch(err){answer(text);notify('Ollama não encontrado. Inicie Ollama e baixe qwen2.5-coder:7b.');}finally{thinking.remove()}})()}$('#chatForm').addEventListener('submit',e=>{e.preventDefault();send(promptInput.value)});promptInput.addEventListener('input',()=>{promptInput.style.height='auto';promptInput.style.height=Math.min(promptInput.scrollHeight,110)+'px'});document.querySelectorAll('.suggestion').forEach(b=>b.addEventListener('click',()=>send(b.dataset.prompt)));$('#newChat').addEventListener('click',()=>{messages.innerHTML='<div class="date-divider"><span>HOJE</span></div><div class="assistant-message"><div class="assistant-mark tiny">✳</div><div class="message-content"><p>Conversa nova! O que você quer construir hoje?</p></div></div>';notify('Nova conversa iniciada')});$('#connectBtn').addEventListener('click',()=>notify('Instale o Ollama e execute: ollama pull qwen2.5-coder:7b. Depois envie uma mensagem para conectar.')); $('#runBtn').addEventListener('click',()=>{if(!generatedHtml){notify('Peça à IA para criar uma página primeiro.');return}const frame=document.createElement('iframe');frame.title='Prévia do projeto';frame.setAttribute('sandbox','allow-scripts');frame.style.cssText='width:100%;height:100%;border:0;background:white';frame.srcdoc=generatedHtml;$('#preview').replaceChildren(frame);$('#terminalOutput').innerHTML='<span class="terminal-prompt">$</span> Prévia local executada com segurança';notify('Prévia executada no navegador. Nenhum código foi enviado para fora do seu PC.')});$('#previewBtn').addEventListener('click',()=>{if(generatedHtml){$('#runBtn').click()}else notify('Peça à IA para criar uma página primeiro.')});$('#clearTerminal').addEventListener('click',()=>{$('#terminalOutput').innerHTML='<span class="terminal-prompt">$</span> Terminal limpo<span class="blinking">_</span>'});$('#projectsNav').addEventListener('click',()=>notify('Seu projeto atual: landing-page'));document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('#newChat').click()}if(e.key==='Escape')promptInput.blur()});
