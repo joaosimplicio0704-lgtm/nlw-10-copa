@@ -7,10 +7,17 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+
   <header>
-    <h1>IA do zero</h1>
-    <p>rede neural + parser de código + analisador estático. tudo escrito na mão, sem biblioteca externa.</p>
+    <div class="brand"><div class="dot"></div> IA do zero</div>
+    <p>rede neural + parser de código + analisador estático. tudo escrito do zero, sem biblioteca externa.</p>
   </header>
+
+  <div class="search-wrap">
+    <input type="text" class="search-bar" id="snippetInput"
+      placeholder="cole um trecho de código JavaScript…"
+      value="function init() { for (let i = 0; i < n; i++) { if (ok) { return i; } } }" />
+  </div>
 
   <nav class="tabs">
     <button class="tab active" data-view="view-train">treino</button>
@@ -31,19 +38,22 @@
           <button id="loadBtn">carregar modelo</button>
         </div>
         <div class="stats">
-          <span>épocas: <b id="epoch">0</b></span>
-          <span>erro: <b id="error">-</b></span>
+          <span class="stat-item"><span class="stat-dot"></span> épocas: <b id="epoch">0</b></span>
+          <span class="stat-item">erro: <b id="error">-</b></span>
         </div>
-        <canvas id="chart" width="420" height="160"></canvas>
+        <canvas id="chart" width="700" height="200"></canvas>
       </div>
-      <div class="row compact">
-        <label>camada para heatmap de pesos</label>
-        <select id="layerSelect">
-          <option value="0">oculta 1 (16×16)</option>
-          <option value="1">oculta 2 (16×16)</option>
-          <option value="2">saída (4×16)</option>
-        </select>
-        <canvas id="heatCanvas" width="320" height="160"></canvas>
+
+      <div class="panel" style="margin-top:14px">
+        <label style="display:block;margin-bottom:8px;font-size:12px;color:var(--muted);font-weight:600;letter-spacing:0.05em;text-transform:uppercase">heatmap de pesos por camada</label>
+        <div class="row compact" style="align-items:flex-start">
+          <select id="layerSelect">
+            <option value="0">oculta 1 (16×16)</option>
+            <option value="1">oculta 2 (16×16)</option>
+            <option value="2">saída (4×16)</option>
+          </select>
+          <canvas id="heatCanvas" width="340" height="180" style="margin-left:12px"></canvas>
+        </div>
       </div>
     </section>
 
@@ -70,7 +80,7 @@
     <!-- rede neural -->
     <section class="panel-view" id="view-net">
       <div class="panel net-panel">
-        <canvas id="netCanvas" width="640" height="300"></canvas>
+        <canvas id="netCanvas" width="720" height="340"></canvas>
       </div>
     </section>
 
@@ -79,21 +89,19 @@
       <div class="panel">
         <label>saída da rede (probabilidades por classe)</label>
         <div id="confidence2" class="confidence"></div>
-        <canvas id="confCanvas" width="320" height="200"></canvas>
+        <canvas id="confCanvas" width="340" height="220"></canvas>
       </div>
     </section>
 
     <!-- log -->
     <section class="panel">
-      <label>log</label>
+      <span class="log-label">log</span>
       <div id="log" class="log"></div>
     </section>
   </main>
 
   <footer>
-    camadas: 16 → 16 → 16 → 4 | ativação: sigmoid | otimizador: Adam | entrada: 16 features (tokenizador real) <br>
-    classes: <b>variável/atribuição</b>, <b>função</b>, <b>fluxo de controle</b>, <b>misto/complexo</b> <br>
-    pesos persistidos em JSON no localStorage
+    camadas: 16 → 16 → 16 → 4 &nbsp;|&nbsp; ativação: sigmoid &nbsp;|&nbsp; otimizador: Adam &nbsp;|&nbsp; entrada: 16 features reais do parser &nbsp;|&nbsp; pesos persistidos em JSON no localStorage
   </footer>
 
   <script type="module" src="main.js"></script>
